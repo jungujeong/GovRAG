@@ -2,7 +2,8 @@ import os
 from langchain.schema import Document
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings, FakeEmbeddings
+from langchain_community.embeddings import FakeEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from config import (
     VECTOR_DB_PATH, 
     CHUNK_SIZE, 
