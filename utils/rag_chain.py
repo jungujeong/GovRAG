@@ -1,5 +1,5 @@
 from langchain.prompts import PromptTemplate
-from langchain_community.llms import Ollama
+from langchain_ollama import OllamaLLM
 from langchain.chains import LLMChain
 from langchain.chains.question_answering import load_qa_chain
 from langchain.schema.output_parser import StrOutputParser
@@ -24,7 +24,8 @@ class RAGChain:
         
         # LLM 초기화
         try:
-            self.llm = Ollama(
+            # 환경 변수에서 모델 가져오기
+            self.llm = OllamaLLM(
                 model=OLLAMA_MODEL,
                 base_url=OLLAMA_BASE_URL,
                 temperature=TEMPERATURE
@@ -44,7 +45,7 @@ class RAGChain:
             2. 고유명사가 있는 경우, 고유명사를 검색 쿼리의 맨 앞에 배치하세요.
             3. 질문을 키워드 중심으로 변환하되, 원본 의미를 유지하세요.
             4. 쿼리가 너무 길어지지 않도록 핵심 키워드만 유지하세요.
-            5. 고유명사가 있는 질문(예: "염성현이란 무엇입니까?")의 경우 고유명사만으로 검색하는 것이 좋습니다(예: "염성현").
+            5. 고유명사가 있는 질문(예: "홍길동이란 무엇입니까?")의 경우 고유명사만으로 검색하는 것이 좋습니다(예: "홍길동").
             6. 질문의 의도가 명확하지 않은 경우, 다양한 검색 키워드 조합을 생성하세요.
             7. 동의어나 관련 용어도 고려하여 검색 효율성을 높이세요.
             
@@ -153,11 +154,11 @@ class RAGChain:
             # 간단한 고유명사 질문 패턴 확인 (다양한 패턴 감지를 위해 확장)
             import re
             patterns = [
-                # 기본 패턴: '염성현이란?', '염성현이 뭐야?' 등
+                # 기본 패턴: '홍길동이란?', '홍길동이 뭐야?' 등
                 r'^([가-힣a-zA-Z0-9]+)[이가](\s)*(는|란|이란|가)(\s)*(무엇|뭐|뭔가|뭘까|누구|어디|언제).*$',
-                # 소유격 패턴: '염성현의 학번은?', '염성현의 소속은?' 등
+                # 소유격 패턴: '홍길동의 학번은?', '홍길동의 소속은?' 등
                 r'^([가-힣a-zA-Z0-9]+)의(\s)*(은|는|이|가|란).*$',
-                # 직접 질문 패턴: '염성현은 어느 학교를 다니나요?'
+                # 직접 질문 패턴: '홍길동은 어느 학교를 다니나요?'
                 r'^([가-힣a-zA-Z0-9]+)(은|는|이|가)(\s)*([가-힣a-zA-Z0-9\s]+)(인가요|인가|하나요|하나|나요|까요|을까요|일까요).*$'
             ]
             
@@ -378,10 +379,10 @@ class RAGChain:
                     collection = self.vector_store.vector_db._collection
                     collection_stats = collection.count()
                     logger.warning(f"검색 결과 없음: 벡터 DB에 {collection_stats}개 문서 있음")
-                    return f"관련 문서를 찾을 수 없습니다. 현재 벡터 DB에는 {collection_stats}개의 문서가 있습니다. 다른 질문을 시도하거나, '염성현'에 관한 문서를 추가해 보세요."
+                    return f"관련 문서를 찾을 수 없습니다. 현재 벡터 DB에는 {collection_stats}개의 문서가 있습니다."
                 except:
                     logger.warning("검색 결과 없음: 관련 문서를 찾을 수 없습니다")
-                    return "관련 문서를 찾을 수 없습니다. '염성현'에 관한 정보가 포함된 문서를 업로드했는지 확인해 주세요."
+                    return "관련 문서를 찾을 수 없습니다."
             
             # 문서 포맷팅
             context = ""

@@ -3,11 +3,35 @@ import time
 import streamlit as st
 from pathlib import Path
 import logging
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 import queue
+import uuid
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from utils import DocumentProcessor, VectorStore, RAGChain
-from config import DOCUMENTS_PATH, logger
+from config import DOCUMENTS_PATH, logger, OLLAMA_MODEL, set_session_context
+
+# 전역 큐 및 결과 저장을 위한 변수들
+processing_queue = queue.Queue()  # 처리할 작업 큐
+result_queue = queue.Queue()  # 결과를 저장할 큐
+processing_lock = Lock()  # 스레드간 동기화를 위한 락
+processing_done_flag = Event()  # 처리 완료 신호용 이벤트
+processing_done_flag.set()  # 초기 상태는 완료 상태
+
+# 각 사용자 세션에 고유 ID 할당
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+    # IP 주소 또는 기타 사용자 식별 정보가 있다면 사용
+    user_ip = os.environ.get('REMOTE_ADDR', None)
+    username = os.environ.get('REMOTE_USER', None)
+    user_id = username or user_ip or f"user-{st.session_state.session_id[:8]}"
+    st.session_state.user_id = user_id
+    
+    # 세션 컨텍스트에 사용자 정보 설정
+    set_session_context(st.session_state.session_id, st.session_state.user_id)
+    
+    logger.info(f"새 사용자 세션 시작: {st.session_state.user_id}")
 
 # Configure Streamlit
 st.set_page_config(
@@ -16,10 +40,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# 스레드 간 공유할 글로벌 변수 설정
-processing_results = {}  # 파일 처리 결과 저장
-processing_results_lock = Lock()  # 스레드 안전을 위한 락
 
 # Initialize session state variables
 if "messages" not in st.session_state:
@@ -30,6 +50,8 @@ if "processed_files" not in st.session_state:
     st.session_state.processed_files = set()
 if "processing_files" not in st.session_state:
     st.session_state.processing_files = set()
+if "processing_errors" not in st.session_state:
+    st.session_state.processing_errors = {}
 if "files_to_process" not in st.session_state:
     st.session_state.files_to_process = []
 if "processing_complete" not in st.session_state:
@@ -37,19 +59,25 @@ if "processing_complete" not in st.session_state:
 if "check_processing" not in st.session_state:
     st.session_state.check_processing = False
 if "last_processing_time" not in st.session_state:
-    st.session_state.last_processing_time = 0
+    st.session_state.last_processing_time = time.time()
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = "file_uploader_1"
-
-# 전역 작업 큐 생성 (세션 상태 외부에 위치)
-processing_queue = queue.Queue()
+if "thread_executor" not in st.session_state:
+    st.session_state.thread_executor = None
 
 # Initialize components
 @st.cache_resource
 def initialize_components():
+    """서비스에 필요한 컴포넌트 초기화"""
+    # 세션 컨텍스트 업데이트
+    if 'session_id' in st.session_state and 'user_id' in st.session_state:
+        set_session_context(st.session_state.session_id, st.session_state.user_id)
+    
+    # 컴포넌트 초기화
     document_processor = DocumentProcessor()
     vector_store = VectorStore()
-    rag_chain = RAGChain(vector_store=vector_store)
+    rag_chain = RAGChain(vector_store=vector_store.vector_db)
+    
     return document_processor, vector_store, rag_chain
 
 # 전역 변수로 먼저 선언
@@ -67,7 +95,7 @@ def reinitialize_components():
     # Return new instances
     document_processor = DocumentProcessor()
     vector_store = VectorStore()
-    rag_chain = RAGChain(vector_store=vector_store)
+    rag_chain = RAGChain(vector_store=vector_store.vector_db)
     return document_processor, vector_store, rag_chain
 
 # CSS for better UI
@@ -104,33 +132,37 @@ st.markdown(
 # Function to add new document to vector store
 def add_document_to_vectorstore(file_path, file_name):
     try:
-        # 문서 텍스트 추출 (이제 메타데이터도 함께 반환)
-        text, metadata = document_processor.extract_text(file_path)
+        # 새로운 process_document 메서드를 사용하여 텍스트 추출 및 요약
+        text, summary = document_processor.process_document(file_path)
         
         # 텍스트 추출 실패 시 
         if not text or not isinstance(text, str):
-            logger.error(f"문서 '{file_name}'에서 텍스트를 추출할 수 없습니다.")
-            return False
+            error_msg = f"문서 '{file_name}'에서 텍스트를 추출할 수 없습니다."
+            logger.error(error_msg)
+            return False, error_msg
         
-        # 메타데이터가 없으면 기본값 설정
-        if not metadata or not isinstance(metadata, dict):
-            metadata = {"source": file_name}
-        elif "source" not in metadata:
-            metadata["source"] = file_name
+        # 메타데이터 설정
+        metadata = {
+            "source": file_name,
+            "summary": summary[:500] if summary else ""  # 요약 메타데이터 추가 (길이 제한)
+        }
         
         # 문서 길이와 기본 정보 기록
         logger.info(f"문서 '{file_name}' 추가 시작 (길이: {len(text)} 문자)")
         
         # 여러 번 시도 
         max_retries = 3
+        last_error = None
+        
         for attempt in range(max_retries):
             try:
                 # 벡터 스토어에 추가
                 vector_store.add_document(text, metadata)
                 logger.info(f"Document {file_name} successfully added to vector store")
-                return True
+                return True, None
             except Exception as e:
-                error_msg = str(e).lower()
+                last_error = str(e)
+                error_msg = last_error.lower()
                 logger.error(f"문서 추가 시도 {attempt+1}/{max_retries} 실패: {e}")
                 
                 # 오류 유형에 따른 처리
@@ -140,58 +172,181 @@ def add_document_to_vectorstore(file_path, file_name):
                 elif "duplicate" in error_msg:
                     # 이미 존재하는 문서이면 성공으로 처리
                     logger.warning(f"문서 '{file_name}'이(가) 이미 벡터 저장소에 존재합니다.")
-                    return True
+                    return True, None
                 else:
                     # 기타 오류는 마지막 시도까지 계속 재시도
                     time.sleep(0.5)
         
         # 모든 시도 실패 후
-        logger.error(f"모든 시도 실패: 문서 '{file_name}'을(를) 벡터 저장소에 추가할 수 없습니다.")
-        return False
+        error_msg = f"모든 시도 실패: 문서 '{file_name}'을(를) 벡터 저장소에 추가할 수 없습니다. 오류: {last_error}"
+        logger.error(error_msg)
+        return False, error_msg
+    
     except Exception as e:
-        logger.error(f"Error adding document to vector store: {e}")
-        return False
+        error_msg = f"문서 처리 중 오류 발생: {e}"
+        logger.error(error_msg)
+        return False, error_msg
 
-# Background processing function - 세션 상태 의존성 제거
-def process_documents_thread(file_queue, files_to_process):
-    global processing_results
+# 단일 파일 처리 함수 (ThreadPoolExecutor에서 사용)
+def process_single_document(file_item, session_id, user_id):
+    file_path, file_name = file_item
+    
+    # 세션 컨텍스트 설정
+    set_session_context(session_id, user_id)
     
     try:
-        total_files = len(files_to_process)
-        processed = 0
+        logger.info(f"벡터 DB에 '{file_name}' 처리 시작")
+        success, error_msg = add_document_to_vectorstore(file_path, file_name)
         
-        while not file_queue.empty():
-            try:
-                file_path, file_name = file_queue.get()
-                success = add_document_to_vectorstore(file_path, file_name)
-                logger.info(f"{'Successfully processed' if success else 'Failed to process'} document: {file_name}")
-                processed += 1
-                
-                # 처리 결과를 글로벌 변수에 저장 (스레드 안전하게)
-                with processing_results_lock:
-                    processing_results[file_name] = success
-                    
-                # 처리 간격 조절 (너무 빠른 처리로 인한 UI 미업데이트 방지)
-                if processed < total_files:
-                    time.sleep(0.3)
-                
-            except Exception as e:
-                logger.error(f"Error processing document: {e}")
-                # 에러 발생 시도 결과 저장
-                with processing_results_lock:
-                    processing_results[file_name] = False
-            finally:
-                file_queue.task_done()
+        # 결과를 직접 반환 (큐를 사용하지 않음)
+        logger.info(f"{'Successfully processed' if success else 'Failed to process'} document: {file_name}")
         
-        # 큐가 비었을 때 로그 추가
-        logger.info("Queue is empty, all documents have been processed")
-        
-        # 모든 처리가 완료된 후 메인 스레드가 결과를 확인할 수 있도록 추가 대기
-        logger.info("All documents processed, waiting for main thread to update UI")
-        time.sleep(0.5)
+        # 처리 결과를 반환
+        return {
+            "file_name": file_name,
+            "success": success,
+            "error": error_msg,
+            "timestamp": time.time()
+        }
     
     except Exception as e:
-        logger.error(f"Error in processing thread: {e}")
+        error_msg = f"파일 '{file_name}' 처리 중 오류: {e}"
+        logger.error(error_msg)
+        
+        # 오류 정보를 반환
+        return {
+            "file_name": file_name,
+            "success": False,
+            "error": error_msg,
+            "timestamp": time.time()
+        }
+
+# 개선된 문서 처리 스레드 함수
+def process_documents_thread(session_id, user_id):
+    """
+    문서 처리를 위한 백그라운드 스레드 함수
+    
+    Args:
+        session_id (str): 세션 ID
+        user_id (str): 사용자 ID
+    """
+    global processing_done_flag
+    
+    files_list = list(processing_queue.queue)
+    
+    logger.info(f"문서 처리 스레드 시작: {len(files_list)}개 파일")
+    
+    # 세션 컨텍스트 설정
+    set_session_context(session_id, user_id)
+    
+    # 처리 중 상태로 설정
+    processing_done_flag.clear()
+    
+    try:
+        # ThreadPoolExecutor로 병렬 처리 (max_workers는 파일 수와 CPU 코어 수에 따라 조정)
+        with ThreadPoolExecutor(max_workers=min(os.cpu_count() or 2, 4)) as executor:
+            # 모든 파일에 대해 작업 제출
+            futures = {executor.submit(process_single_document, item, session_id, user_id): item for item in files_list}
+            
+            # 처리 결과 수집
+            for future in futures:
+                try:
+                    # 결과를 받아서 결과 큐에 추가
+                    result = future.result()
+                    if result:
+                        result_queue.put(result)
+                except Exception as e:
+                    # 처리 중 발생한 예외 로깅
+                    file_path, file_name = futures[future]
+                    logger.error(f"파일 '{file_name}' 처리 중 예외 발생: {e}")
+                    
+                    # 오류 정보도 큐에 추가
+                    result_queue.put({
+                        "file_name": file_name,
+                        "success": False,
+                        "error": str(e),
+                        "timestamp": time.time()
+                    })
+        
+        # 모든 처리 완료 로그
+        logger.info("모든 문서 처리 작업 완료")
+    
+    except Exception as e:
+        logger.error(f"문서 처리 스레드에서 예외 발생: {e}")
+    
+    finally:
+        # 큐 비우기
+        while not processing_queue.empty():
+            try:
+                processing_queue.get(block=False)
+                processing_queue.task_done()
+            except queue.Empty:
+                break
+        
+        # 처리 완료 표시
+        processing_done_flag.set()
+        
+        # 완료 신호 큐에 추가
+        result_queue.put({
+            "status": "complete",
+            "timestamp": time.time()
+        })
+        
+        logger.info("문서 처리 스레드 종료")
+
+# 처리 결과 확인 함수
+def check_processing_results():
+    """
+    결과 큐에서 처리 결과를 확인하고 상태를 업데이트하는 함수
+    """
+    update_needed = False
+    processed_count = 0
+    error_count = 0
+    
+    # 결과 큐에서 데이터 처리
+    while not result_queue.empty():
+        try:
+            result = result_queue.get(block=False)
+            
+            # 완료 신호인 경우 처리
+            if "status" in result and result["status"] == "complete":
+                logger.info("처리 완료 신호 수신")
+                # 처리 상태 완료로 변경
+                st.session_state.processing_done = True
+                st.session_state.processing_complete = True
+                st.session_state.check_processing = False
+                st.session_state.last_processing_time = result.get("timestamp", time.time())
+                return True, "complete"
+            
+            # 파일 처리 결과인 경우
+            file_name = result.get("file_name")
+            success = result.get("success", False)
+            error = result.get("error")
+            timestamp = result.get("timestamp", time.time())
+            
+            # 마지막 처리 시간 갱신
+            st.session_state.last_processing_time = timestamp
+            
+            # 파일 상태 업데이트
+            if file_name and file_name in st.session_state.processing_files:
+                st.session_state.processing_files.remove(file_name)
+                
+                if success:
+                    st.session_state.processed_files.add(file_name)
+                    processed_count += 1
+                    logger.info(f"파일 '{file_name}' 처리 결과 업데이트: 성공")
+                else:
+                    st.session_state.processing_errors[file_name] = error or "알 수 없는 오류"
+                    error_count += 1
+                    logger.warning(f"파일 '{file_name}' 처리 결과 업데이트: 실패 ({error})")
+            
+            update_needed = True
+            
+        except queue.Empty:
+            # 큐가 비어있으면 종료
+            break
+    
+    return update_needed, processed_count
 
 # Start the sidebar
 st.sidebar.title("📚 문서 관리")
@@ -221,6 +376,8 @@ if uploaded_files:
                 st.write(f"- ✅ {file.name} (처리 완료)")
             elif file.name in st.session_state.processing_files:
                 st.write(f"- ⏳ {file.name} (처리 중)")
+            elif file.name in st.session_state.processing_errors:
+                st.write(f"- ❌ {file.name} (오류: {st.session_state.processing_errors[file.name]})")
             else:
                 st.write(f"- 📄 {file.name}")
         
@@ -246,7 +403,15 @@ if uploaded_files:
                 # 처리 목록 초기화
                 st.session_state.processing_files = set()
                 st.session_state.processed_files = set()
+                st.session_state.processing_errors = {}
                 st.session_state.last_processing_time = time.time()
+                
+                # 이전 결과 큐 비우기
+                while not result_queue.empty():
+                    try:
+                        result_queue.get(block=False)
+                    except:
+                        pass
                 
                 # 파일 목록 저장
                 files_to_process = [file.name for file in uploaded_files]
@@ -255,6 +420,10 @@ if uploaded_files:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
+                # 기존 스레드 처리 중지 (있는 경우)
+                if not processing_done_flag.is_set():
+                    processing_done_flag.set()
+                
                 successful_uploads = 0
                 for i, file in enumerate(uploaded_files):
                     status_text.text(f"처리 중: {file.name} ({i+1}/{total_files})")
@@ -262,15 +431,37 @@ if uploaded_files:
                     # 처리 중인 파일 목록에 추가
                     st.session_state.processing_files.add(file.name)
                     
-                    # Save the file
-                    success, file_path_or_error = document_processor.save_document(file, overwrite=True)
-                    
-                    if success:
-                        # Add to processing queue
-                        processing_queue.put((file_path_or_error, file.name))
-                        successful_uploads += 1
-                    else:
-                        st.sidebar.error(f"문서 저장 실패: {file.name} - {file_path_or_error}")
+                    try:
+                        # 파일 저장 (임시 디렉토리에)
+                        os.makedirs(document_processor.documents_path, exist_ok=True)
+                        file_path = os.path.join(document_processor.documents_path, file.name)
+                        
+                        # 파일 저장
+                        with open(file_path, 'wb') as f:
+                            f.write(file.getbuffer())
+                        
+                        # 파일 유효성 검사
+                        is_valid, message = document_processor.validate_file(file_path)
+                        if is_valid:
+                            # 유효한 파일은 처리 큐에 추가
+                            processing_queue.put((file_path, file.name))
+                            successful_uploads += 1
+                        else:
+                            st.sidebar.error(f"문서 유효성 검사 실패: {file.name} - {message}")
+                            # 처리 오류 기록
+                            st.session_state.processing_errors[file.name] = message
+                            # 실패한 파일은 처리 중 목록에서 제거
+                            st.session_state.processing_files.remove(file.name)
+                            # 저장된 파일 삭제
+                            try:
+                                os.remove(file_path)
+                            except:
+                                pass
+                    except Exception as e:
+                        error_msg = str(e)
+                        st.sidebar.error(f"문서 저장 실패: {file.name} - {error_msg}")
+                        # 처리 오류 기록
+                        st.session_state.processing_errors[file.name] = error_msg
                         # 실패한 파일은 처리 중 목록에서 제거
                         st.session_state.processing_files.remove(file.name)
                     
@@ -286,15 +477,22 @@ if uploaded_files:
                     time.sleep(2)
                     st.rerun()
                 
-                # Start background processing thread - 필요한 정보 전달
-                processing_thread = Thread(
-                    target=process_documents_thread, 
-                    args=(processing_queue, files_to_process)
-                )
+                # 처리 시작 상태로 설정
+                processing_done_flag.clear()
+                
+                # 실제 세션 ID와 사용자 ID 가져오기
+                session_id = st.session_state.session_id
+                user_id = st.session_state.user_id
+                
+                # 새 스레드 시작 (세션 ID와 사용자 ID 직접 전달)
+                processing_thread = Thread(target=process_documents_thread, args=(session_id, user_id))
                 processing_thread.daemon = True
                 processing_thread.start()
                 
-                # 처리 시작 상태로 설정하여 처리 체크 활성화
+                # 스레드 추적을 위해 저장
+                st.session_state.thread_executor = processing_thread
+                
+                # 처리 상태 업데이트
                 st.session_state.check_processing = True
                 st.session_state.last_processing_time = time.time()
                 
@@ -321,65 +519,74 @@ if st.session_state.check_processing:
     # 현재 시간 기록하여 타임아웃 계산에 사용
     current_time = time.time()
     
-    # 처리 결과 확인
-    processed_count = 0
-    update_needed = False
+    # 결과 큐에서 처리 결과 확인
+    update_needed, result_status = check_processing_results()
     
-    with processing_results_lock:
-        if processing_results:  # 처리된 결과가 있는 경우만 업데이트
-            update_needed = True
-            st.session_state.last_processing_time = current_time  # 처리 결과가 있으면 마지막 처리 시간 갱신
-            for file_name, success in list(processing_results.items()):
-                if file_name in st.session_state.processing_files:
-                    st.session_state.processing_files.remove(file_name)
-                    if success:
-                        st.session_state.processed_files.add(file_name)
-                        processed_count += 1
-                    processing_results.pop(file_name)
+    # 완료 신호를 받은 경우
+    if result_status == "complete":
+        st.rerun()
     
-    # 처리 타임아웃 확인 (30초 동안 처리 결과 없으면 처리 완료로 간주)
-    timeout_seconds = 30
+    # 처리 타임아웃 확인 (더 긴 시간으로 조정 - 60초)
+    timeout_seconds = 60
     if (current_time - st.session_state.last_processing_time > timeout_seconds) and st.session_state.processing_files:
         logger.warning(f"{timeout_seconds}초 동안 처리 결과가 없어 타임아웃 발생. 남은 파일: {st.session_state.processing_files}")
-        # 남은 처리 중 파일을 처리 실패로 간주하고 목록에서 제거
+        
+        # 남은 처리 중 파일을 오류로 표시
         for file_name in list(st.session_state.processing_files):
             st.session_state.processing_files.remove(file_name)
-            logger.warning(f"타임아웃으로 인해 파일 '{file_name}'의 처리를 완료로 간주함")
+            st.session_state.processing_errors[file_name] = "처리 시간 초과"
+            logger.warning(f"타임아웃으로 인해 파일 '{file_name}'의 처리를 실패로 표시")
+        
         # 타임아웃으로 모든 처리 완료로 표시
         st.session_state.processing_done = True
         st.session_state.processing_complete = True
         st.session_state.check_processing = False
         st.rerun()
     
-    # 큐가 비었는데 아직 처리 중 상태인 경우 강제로 처리 완료로 전환
-    if processing_queue.empty() and st.session_state.processing_files and st.session_state.files_to_process:
-        logger.info(f"큐는 비었지만 처리 중인 파일이 남아있어 강제로 처리 완료 처리함: {st.session_state.processing_files}")
+    # 스레드 종료 감지
+    if processing_done_flag.is_set() and st.session_state.processing_files:
+        logger.info("처리 스레드 종료 감지, 남은 파일 상태 업데이트 중")
         
-        # 남은 처리 중 파일을 처리 실패로 간주하고 목록에서 제거
-        for file_name in list(st.session_state.processing_files):
-            st.session_state.processing_files.remove(file_name)
-            logger.warning(f"파일 '{file_name}'의 처리 상태를 확인할 수 없어 처리 완료로 간주함")
-            
-        # 모든 파일 처리 완료로 표시
+        # 결과 큐에서 모든 결과를 처리한 후 남은 파일 처리
+        # 추가 시간을 주어 큐의 모든 결과가 처리되도록 함
+        time.sleep(1.0)
+        update_needed, _ = check_processing_results()
+        
+        # 추가 처리 후에도 남은 파일이 있다면 오류로 처리
+        remaining_files = list(st.session_state.processing_files)
+        if remaining_files:
+            for file_name in remaining_files:
+                # 파일이 실제로 성공적으로 처리되었는지 확인
+                if document_processor.file_exists(file_name):
+                    # 파일이 존재하면 이미 처리된 것으로 간주
+                    st.session_state.processing_files.remove(file_name)
+                    st.session_state.processed_files.add(file_name)
+                    logger.info(f"파일 '{file_name}'은(는) 성공적으로 처리되었으나 상태 업데이트가 지연되었습니다.")
+                else:
+                    # 파일이 존재하지 않으면 실패로 간주
+                    st.session_state.processing_files.remove(file_name)
+                    st.session_state.processing_errors[file_name] = "처리가 완료되지 않음"
+                    logger.warning(f"파일 '{file_name}'의 처리 상태를 실패로 업데이트")
+        
+        # 처리 완료 상태로 설정
         st.session_state.processing_done = True
         st.session_state.processing_complete = True
         st.session_state.check_processing = False
         st.rerun()
     
     # 모든 파일 처리 완료 확인
-    if len(st.session_state.processing_files) == 0 and st.session_state.files_to_process:
-        logger.info(f"모든 문서 처리 완료: {processed_count}개 문서 성공적으로 처리됨")
+    if not st.session_state.processing_files and processing_done_flag.is_set():
+        logger.info(f"모든 문서 처리 완료: {len(st.session_state.processed_files)}개 성공, {len(st.session_state.processing_errors)}개 실패")
         st.session_state.processing_done = True
         st.session_state.processing_complete = True
         st.session_state.check_processing = False
-        # 자동으로 페이지 재로드
         st.rerun()
     
     # 업데이트가 필요한 경우 또는 주기적으로 화면 갱신
-    if update_needed or int(time.time()) % 2 == 0:  # 2초마다 한 번씩 강제 갱신 (더 빈번하게)
+    if update_needed or int(time.time()) % 2 == 0:  # 2초마다 한 번씩 강제 갱신
         # 처리 중인 경우 상태 표시 업데이트
         total_to_process = len(st.session_state.files_to_process)
-        completed = total_to_process - len(st.session_state.processing_files)
+        completed = len(st.session_state.processed_files) + len(st.session_state.processing_errors)
         
         # 처리 중 상태 표시
         with st.sidebar:
@@ -399,7 +606,13 @@ if st.session_state.check_processing:
                 for file_name in st.session_state.processed_files:
                     st.write(f"- ✅ {file_name}")
             
-            # 수동 새로고침 버튼 (처리가 중단된 경우를 위한 기능)
+            # 오류 발생 문서 표시
+            if st.session_state.processing_errors:
+                st.write("**오류 발생 문서:**")
+                for file_name, error in st.session_state.processing_errors.items():
+                    st.write(f"- ❌ {file_name}: {error[:50]}{'...' if len(error) > 50 else ''}")
+            
+            # 수동 새로고침 버튼
             col1, col2 = st.columns([3, 1])
             with col2:
                 if st.button("🔄 새로고침", key="refresh_status"):
@@ -409,30 +622,6 @@ if st.session_state.check_processing:
         # 주기적 자동 새로고침 (더 짧은 간격)
         time.sleep(0.5)
         st.rerun()
-
-if st.session_state.processing_complete:
-    st.sidebar.success("🎉 **모든 문서 처리가 완료되었습니다!**")
-    st.sidebar.info("업로드된 모든 문서가 벡터 DB에 성공적으로 추가되었습니다.")
-    
-    # 완료 처리
-    st.session_state.processing_complete = False
-    
-    # 업로드된 파일 목록 초기화
-    st.session_state.files_to_process = []
-    st.session_state.processed_files = set()
-    st.session_state.processing_files = set()  # 명시적으로 처리 중 파일 목록도 초기화
-    
-    # 파일 업로더 상태 초기화 - 키를 변경하여 완전히 새로운 업로더 위젯 생성
-    st.session_state.uploader_key = f"file_uploader_{int(time.time())}"
-    
-    # 세션에서 이전 업로더 키와 관련된 데이터 제거
-    for key in list(st.session_state.keys()):
-        if key.startswith("file_uploader") and key != st.session_state.uploader_key:
-            del st.session_state[key]
-    
-    # 프론트엔드 갱신 (충분한 시간을 두어 사용자가 메시지를 볼 수 있게 함)
-    time.sleep(1.0)
-    st.rerun()
 
 # Document management section
 with st.sidebar.expander("문서 관리", expanded=True):
@@ -581,26 +770,30 @@ with st.sidebar.expander("문서 요약", expanded=True):
                     time.sleep(1)
                     st.rerun()
                 
-                # 진행 상태 업데이트 (최대 5분할로 나누어 업데이트)
+                # 진행 상태 업데이트
+                # 이전의 변수 i와 step_count가 정의되지 않은 상태로 사용되어 오류 발생
                 step_count = min(20, int(est_time_seconds / 1.5))
                 for i in range(30, 95, int(65/step_count) if step_count > 0 else 65):
-                    # 취소 확인
                     if st.session_state.cancel_summary:
                         status_container.warning("❌ 요약이 취소되었습니다.")
                         st.session_state.summarizing = False
                         st.session_state.cancel_summary = False
                         time.sleep(1)
                         st.rerun()
-                        break
                     
                     progress_bar.progress(i)
                     time.sleep(est_time_seconds / step_count if step_count > 0 else 0.1)
                 
                 # 요약 생성
                 if not st.session_state.cancel_summary:
+                    # 세션 컨텍스트 업데이트
+                    set_session_context(st.session_state.session_id, st.session_state.user_id)
+                    
                     # 요약 실행 (타임아웃 설정)
                     try:
+                        logger.info(f"문서 요약 시작: {docs_to_summarize}")
                         summary = rag_chain.summarize(document_text)
+                        logger.info(f"문서 요약 완료: {docs_to_summarize}")
                     except Exception as e:
                         logger.error(f"Summarization error: {e}")
                         status_container.error("⏱️ 요약 생성 중 오류가 발생했습니다.")
@@ -691,18 +884,18 @@ with st.sidebar.expander("문서 요약", expanded=True):
 
 # 디버깅 도구를 맨 아래로 이동 (접었다 펼칠 수 있게)
 with st.sidebar.expander("🛠️ 디버깅 도구", expanded=False):
-    # Windows 서버 연결 상태 확인 버튼
-    if st.button("Windows 서버 연결 상태 확인", key="check_windows_server"):
-        with st.spinner("Windows 서버 연결 상태 확인 중..."):
+    # hwplib 초기화 상태 확인 버튼
+    if st.button("HWP 처리 모듈 상태 확인", key="check_hwplib"):
+        with st.spinner("hwplib 상태 확인 중..."):
             try:
-                if document_processor.windows_server_available:
-                    st.success("Windows HWP 서버에 정상적으로 연결되었습니다.")
-                    st.info(f"서버 URL: {document_processor.hwp_server_url}")
+                if document_processor.hwp_extractor:
+                    st.success("hwplib가 정상적으로 초기화되었습니다.")
+                    st.info("HWP 파일 처리가 가능합니다.")
                 else:
-                    st.error("Windows HWP 서버에 연결할 수 없습니다.")
-                    st.warning("HWP 파일 처리가 불가능합니다.")
+                    st.error("hwplib가 초기화되지 않았습니다.")
+                    st.warning("HWP 파일 처리가 불가능합니다. Java 설치 및 hwplib JAR 파일 설정을 확인하세요.")
             except Exception as e:
-                st.error(f"연결 상태 확인 중 오류 발생: {str(e)}")
+                st.error(f"초기화 상태 확인 중 오류 발생: {str(e)}")
     
     st.markdown("---")
     st.write("⚠️ **주의**: 아래 기능은 모든 데이터를 삭제합니다")
@@ -710,15 +903,20 @@ with st.sidebar.expander("🛠️ 디버깅 도구", expanded=False):
     if st.button("벡터 DB 초기화", key="clear_vector_db"):
         with st.spinner("벡터 DB 초기화 중..."):
             try:
-                # 파일 시스템의 문서도 함께 삭제
-                doc_files = document_processor.list_documents()
+                # 파일 목록 조회 (기존 document_processor.list_documents 메서드 대신 직접 구현)
+                doc_files = [f for f in os.listdir(document_processor.documents_path) 
+                             if f.lower().endswith(('.hwp', '.pdf'))]
                 deleted_count = 0
                 
                 if doc_files:
                     for doc_file in doc_files:
-                        # vector_store는 전달하지 않음 (벡터 DB는 별도로 초기화할 것이므로)
-                        if document_processor.delete_document(doc_file):
+                        # 파일 삭제 시도
+                        try:
+                            file_path = os.path.join(document_processor.documents_path, doc_file)
+                            os.remove(file_path)
                             deleted_count += 1
+                        except Exception as e:
+                            logger.error(f"파일 삭제 실패: {doc_file} - {e}")
                 
                 # 벡터 DB 초기화 시도
                 success = vector_store.clear()
@@ -782,7 +980,12 @@ if prompt := st.chat_input("질문을 입력하세요..."):
         # Generate assistant response
         try:
             with st.spinner("답변 생성 중..."):
+                # 세션 컨텍스트 업데이트
+                set_session_context(st.session_state.session_id, st.session_state.user_id)
+                
+                logger.info(f"질문 입력: '{prompt}'")
                 response = rag_chain.query(prompt)
+                logger.info(f"응답 생성 완료: {len(response)} 자")
                 
                 # Simulate streaming effect
                 for chunk in response.split():
@@ -811,6 +1014,37 @@ if st.session_state.vector_db_cleared:
     # 벡터 DB 초기화 후 첫 실행 시 상태 메시지 표시
     st.sidebar.success("모든 컴포넌트가 재초기화되었습니다. 새 문서를 업로드해주세요.")
     # 상태 메시지를 위한 시간 지연 없이 즉시 표시
+
+if st.session_state.processing_complete:
+    st.sidebar.success("🎉 **모든 문서 처리가 완료되었습니다!**")
+    
+    # 성공 및 오류 수 표시
+    success_count = len(st.session_state.processed_files)
+    error_count = len(st.session_state.processing_errors)
+    total_count = success_count + error_count
+    
+    if error_count == 0:
+        st.sidebar.info(f"업로드된 모든 문서({success_count}개)가 벡터 DB에 성공적으로 추가되었습니다.")
+    else:
+        st.sidebar.warning(f"{success_count}/{total_count}개 문서가 추가되었습니다. {error_count}개 문서에 오류가 발생했습니다.")
+    
+    # 완료 처리
+    st.session_state.processing_complete = False
+    
+    # 업로드된 파일 목록 초기화 (오류 파일은 유지)
+    st.session_state.files_to_process = []
+    
+    # 파일 업로더 상태 초기화 - 키를 변경하여 완전히 새로운 업로더 위젯 생성
+    st.session_state.uploader_key = f"file_uploader_{int(time.time())}"
+    
+    # 세션에서 이전 업로더 키와 관련된 데이터 제거
+    for key in list(st.session_state.keys()):
+        if key.startswith("file_uploader") and key != st.session_state.uploader_key:
+            del st.session_state[key]
+    
+    # 프론트엔드 갱신 (충분한 시간을 두어 사용자가 메시지를 볼 수 있게 함)
+    time.sleep(1.0)
+    st.rerun()
 
 if __name__ == "__main__":
     pass 
