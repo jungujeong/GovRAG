@@ -9,6 +9,7 @@ import sys
 import platform
 from config import DOCUMENTS_PATH, logger
 import fitz  # PyMuPDF
+import streamlit as st
 
 # HWP Linux/Mac OS 지원을 위한 hwplib 임포트
 try:
@@ -32,6 +33,11 @@ class DocumentProcessor:
             except Exception as e:
                 logger.error(f"hwplib 초기화 실패: {e}")
                 self.hwp_extractor = None
+        
+        # 스트림릿 세션 상태 초기화
+        st.session_state.processing_files = set()  # 처리 중인 파일
+        st.session_state.processed_files = set()   # a처리 완료된 파일
+        st.session_state.processing_errors = {}    # 오류 발생 파일
     
     def process_hwp_file(self, file_path):
         """hwplib를 사용하여 HWP 파일 처리"""
