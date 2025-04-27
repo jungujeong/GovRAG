@@ -897,6 +897,64 @@ with st.sidebar.expander("🛠️ 디버깅 도구", expanded=False):
             except Exception as e:
                 st.error(f"초기화 상태 확인 중 오류 발생: {str(e)}")
     
+    # 문서 텍스트 확인 도구 추가
+    st.markdown("---")
+    st.write("📄 **문서 텍스트 추출 확인**")
+    
+    # 선택 가능한 문서 목록 가져오기
+    available_docs = document_processor.list_documents()
+    
+    if available_docs:
+        # 문서 선택 드롭다운
+        selected_doc = st.selectbox(
+            "텍스트를 확인할 문서 선택",
+            options=available_docs,
+            key="extract_text_doc_select"
+        )
+        
+        # 텍스트 추출 버튼
+        if st.button("텍스트 추출 보기", key="extract_text_btn"):
+            with st.spinner("문서에서 텍스트 추출 중..."):
+                try:
+                    # 문서 경로 가져오기
+                    doc_path = os.path.join(document_processor.documents_path, selected_doc)
+                    
+                    # 텍스트 추출
+                    extracted_text, metadata = document_processor.extract_text(doc_path)
+                    
+                    if extracted_text and len(extracted_text.strip()) > 0:
+                        # 파일 정보 표시
+                        file_size = Path(doc_path).stat().st_size / 1024  # KB 단위
+                        
+                        st.success(f"텍스트 추출 완료: {selected_doc}")
+                        st.info(f"파일 크기: {file_size:.2f} KB, 추출된 텍스트: {len(extracted_text)} 자")
+                        
+                        # 텍스트 표시 (처음 1000자와 마지막 1000자)
+                        if len(extracted_text) > 2000:
+                            st.text_area("추출된 텍스트 (처음 1000자)", extracted_text[:1000], height=200)
+                            st.text_area("추출된 텍스트 (마지막 1000자)", extracted_text[-1000:], height=200)
+                            
+                            # 전체 텍스트 표시 옵션
+                            if st.checkbox("전체 텍스트 보기"):
+                                st.text_area("전체 텍스트", extracted_text, height=400)
+                        else:
+                            st.text_area("추출된 텍스트 전체", extracted_text, height=300)
+                            
+                        # 메타데이터 표시
+                        if metadata:
+                            st.write("**메타데이터:**")
+                            for key, value in metadata.items():
+                                st.write(f"- {key}: {value}")
+                    else:
+                        st.error(f"텍스트 추출 실패 또는 텍스트가 없습니다.")
+                        if "error" in metadata:
+                            st.warning(f"오류: {metadata['error']}")
+                except Exception as e:
+                    st.error(f"텍스트 추출 중 오류 발생: {str(e)}")
+                    logger.error(f"텍스트 추출 확인 도구 오류: {e}")
+    else:
+        st.warning("업로드된 문서가 없습니다. 먼저 문서를 업로드해주세요.")
+    
     st.markdown("---")
     st.write("⚠️ **주의**: 아래 기능은 모든 데이터를 삭제합니다")
     

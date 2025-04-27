@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 가상환경
+venv/
+env/
+ENV/
+
+# IDE 파일
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 로그 파일
+*.log
+
+# 데이터 폴더 (폴더는 유지하고 내용만 무시)
+data/*
+!data/.gitkeep
+
+# 임시 파일
+temp/
+tmp/
+.temp/
+.tmp/
+
+# 모델 파일
+*.pt
+*.pth
+*.h5
+*.model
+*.bin
+*.joblib
+*.pickle
+*.pkl
