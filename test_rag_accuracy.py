@@ -129,4 +129,21 @@ def test_rag_accuracy():
     # 최종 결과
     print("=" * 80)
     print("📊 최종 테스트 결과")
- 
+    print("=" * 80)
+    print(f"총 질문 수: {total_questions}")
+    print(f"답변 정확도: {accurate_answers}/{total_questions} ({accurate_answers/total_questions*100:.1f}%)")
+    print(f"출처 정확도: {accurate_sources}/{total_questions} ({accurate_sources/total_questions*100:.1f}%)")
+    print(f"전체 정확도: {(accurate_answers + accurate_sources)/(total_questions*2)*100:.1f}%")
+    
+    if accurate_answers == total_questions and accurate_sources == total_questions:
+        print("🎉 모든 테스트 통과! 시스템이 완벽하게 작동합니다.")
+    else:
+        print("⚠️  일부 테스트 실패. 추가 개선이 필요합니다.")
+        
+        if accurate_answers < total_questions:
+            print(f"   - 답변 정확도 개선 필요: {total_questions - accurate_answers}개 질문")
+        if accurate_sources < total_questions:
+            print(f"   - 출처 정확도 개선 필요: {total_questions - accurate_sources}개 질문")
+
+if __name__ == "__main__":
+    test_rag_accuracy() 
