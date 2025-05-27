@@ -374,8 +374,8 @@ class SimpleRAGChain:
             # 키워드 매칭률 계산
             keyword_match_rate = keyword_matches / len(question_keywords) if question_keywords else 0
             
-            # 관련성이 높고 실제 키워드가 매칭되는 문서만 출처로 포함
-            if relevance_score >= 0.5 and keyword_match_rate >= 0.4:
+            # 관련성이 높고 실제 키워드가 매칭되는 문서만 출처로 포함 (더 엄격하게)
+            if relevance_score >= 0.6 and keyword_match_rate >= 0.5:
                 # 출처 사용 횟수 증가
                 self.source_reliability[source]['count'] += 1
                 
@@ -396,7 +396,7 @@ class SimpleRAGChain:
                 unique_sources[source] = score
         
         sorted_sources = sorted(unique_sources.items(), key=lambda x: x[1], reverse=True)
-        return [source for source, _ in sorted_sources[:2]]  # 상위 2개만
+        return [source for source, _ in sorted_sources[:1]]  # 가장 관련성 높은 1개만
     
     def _validate_relevance(self, docs: List[Document], query: str) -> bool:
         """질문과 문서의 관련성 엄격 검증 - 개선된 버전"""
@@ -522,20 +522,17 @@ class SimpleRAGChain:
                     sources_text = ", ".join(sources)
                     response = f"{response}\n\n출처: {sources_text}"
                 elif not sources and "출처:" not in response:
-                    # 출처가 없어도 문서에서 답변을 생성했다면 기본 출처 추가
-                    default_sources = []
-                    for doc in filtered_docs[:2]:  # 상위 2개 문서에서 출처 추출
-                        source = doc.metadata.get('source', '')
+                    # 출처가 없어도 문서에서 답변을 생성했다면 가장 관련성 높은 1개 문서만 출처로 추가
+                    if filtered_docs:
+                        # 가장 관련성 높은 문서 1개만 선택
+                        best_doc = max(filtered_docs, key=lambda x: x.metadata.get('relevance_score', 0))
+                        source = best_doc.metadata.get('source', '')
                         if source and source != '알 수 없음':
                             if '/' in source:
                                 source = source.split('/')[-1]
                             elif '\\' in source:
                                 source = source.split('\\')[-1]
-                            default_sources.append(source)
-                    
-                    if default_sources:
-                        sources_text = ", ".join(list(set(default_sources)))  # 중복 제거
-                        response = f"{response}\n\n출처: {sources_text}"
+                            response = f"{response}\n\n출처: {source}"
             
             # 8. 캐시 저장
             if len(self.query_cache) >= self.max_cache_size:
