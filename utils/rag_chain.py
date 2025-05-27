@@ -1,327 +1,581 @@
+import time
+import hashlib
+import re
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, Tuple
+from collections import Counter, defaultdict
+import numpy as np
+
 from langchain.prompts import PromptTemplate
 from langchain_ollama import OllamaLLM
 from langchain.schema.output_parser import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema import Document
 
-from .vector_store import VectorStore
+from .vector_store import EnhancedVectorStore
 from config import (
     OLLAMA_MODEL, 
     OLLAMA_BASE_URL, 
     TEMPERATURE,
     logger
 )
-import re
-import time
 
-class RAGChain:
-    def __init__(self, vector_store=None):
+class SimpleRAGChain:
+    """단순하고 효과적인 RAG 체인"""
+    
+    def __init__(self, vector_store=None, max_documents=20):
         """RAG 체인 초기화"""
+        # 벡터 스토어 설정
         if vector_store is None:
-            self.vector_store = VectorStore()
-            self.is_vector_store_instance = True
+            self.vector_store = EnhancedVectorStore()
         else:
             self.vector_store = vector_store
-            self.is_vector_store_instance = False
         
-        # 벡터 DB 크기 확인
-        self._check_vector_db_size()
+        self.max_documents = max_documents
         
         # LLM 초기화
+        self._initialize_llms()
+        
+        # 프롬프트 초기화
+        self._initialize_prompts()
+        
+        # 체인 설정
+        self._setup_chains()
+        
+        # 간단한 캐시 (최근 10개 질문만)
+        self.query_cache = {}
+        self.max_cache_size = 10
+        
+        # 출처 신뢰도 추적
+        self.source_reliability = defaultdict(lambda: {'score': 0.5, 'count': 0})
+        
+        logger.info("단순 RAG 체인 초기화 완료")
+    
+    def _initialize_llms(self):
+        """LLM 초기화"""
         try:
             self.llm = OllamaLLM(
                 model=OLLAMA_MODEL,
                 base_url=OLLAMA_BASE_URL,
                 temperature=TEMPERATURE
             )
-            logger.info(f"LLM이 {OLLAMA_MODEL} 모델로 초기화되었습니다")
+            logger.info(f"LLM 초기화 완료: {OLLAMA_MODEL}")
         except Exception as e:
             logger.error(f"LLM 초기화 오류: {e}")
             raise
         
-        # 쿼리 변환 프롬프트 
-        self.query_transform_prompt = PromptTemplate.from_template(
-            """주어진 질문을 벡터 데이터베이스에서 검색하기 좋은 형태로 변환해주세요.
-            질문에 포함된 고유명사와 핵심 키워드를 추출하세요.
-            특히 사람 이름, 장소, 조직 등은 반드시 포함하세요.
-            
-            원래 질문: {question}
-            최적화된 검색어:"""
-        )
-        
-        # QA 프롬프트 - 정확도 중심
+    def _initialize_prompts(self):
+        """프롬프트 초기화"""
+        # 메인 QA 프롬프트 - 매우 직접적이고 강력하게
         self.qa_prompt = PromptTemplate.from_template(
-            """다음 질문과 관련된 컨텍스트를 바탕으로 답변해주세요.
-            
-            중요 지침:
-            1. 반드시 제공된 컨텍스트 내의 정보만 사용하여 답변하세요. 컨텍스트에 없는 내용은 절대 포함하지 마세요.
-            2. 컨텍스트에 있는 내용을 정확하게 답변에 포함하세요. 내용을 왜곡하거나 바꾸지 마세요.
-            3. 질문과 직접적으로 관련된 정보가 있으면 반드시 그 정보를 사용하세요.
-            4. 컨텍스트에서 명확히 답변할 수 있는 정보가 전혀 없을 때만 "주어진 문서에서 해당 정보를 찾을 수 없습니다."라고 답하세요.
-            5. 반드시 사용한 모든 정보의 출처를 답변 마지막에 표시하세요.
-            6. 답변에는 컨텍스트에 포함된 사실만 포함하고, 추측이나 일반적인 정보는 절대 포함하지 마세요.
-            7. 컨텍스트의 정보를 그대로 활용하고, 불필요한 패러프레이징은 하지 마세요.
-            8. 본인의 지식이나 경험을 답변에 절대 포함하지 마세요. 오직 주어진 컨텍스트만 사용하세요.
-            9. 답변 끝에는 반드시 출처를 명시하세요. 컨텍스트에 없는 내용을 추가하지 마세요.
-            
-            질문: {question}
-            
-            컨텍스트:
-            {context}
-            
-            답변:"""
+            """질문: {question}
+
+문서 내용:
+{context}
+
+위 문서에서 질문에 대한 답변을 찾아 정확히 인용하여 답변하세요.
+문서에 관련 내용이 없으면 "제공된 문서에서 해당 정보를 찾을 수 없습니다"라고 답변하세요.
+
+답변:"""
         )
         
         # 요약 프롬프트
         self.summarize_prompt = PromptTemplate.from_template(
-            """다음 문서 내용을 요약해주세요. 
-            요약은 한글 기준 5~7문장으로 작성하세요.
-            문서의 핵심 내용과 중요 정보만 포함하세요.
-            
-            문서:
-            {document}
-            
-            요약:"""
+            """다음 문서를 3-5문장으로 요약해주세요.
+
+문서:
+{document}
+
+요약:"""
         )
-        
-        # LCEL 패턴을 사용한 체인 구성
-        self.query_transform_chain = self.query_transform_prompt | self.llm | StrOutputParser()
-        self.summarize_chain = self.summarize_prompt | self.llm | StrOutputParser()
-        
-        # RAG 체인 설정
-        self._setup_rag_chain()
     
-    def _check_vector_db_size(self):
-        """벡터 DB 크기 확인"""
+    def _setup_chains(self):
+        """체인 설정"""
+        self.qa_chain = self.qa_prompt | self.llm | StrOutputParser()
+        self.summarize_chain = self.summarize_prompt | self.llm | StrOutputParser()
+    
+    def _check_db_status(self) -> int:
+        """벡터 DB 상태 확인"""
         try:
-            # VectorStore 인스턴스인 경우 해당 메소드 사용
-            if self.is_vector_store_instance:
-                db_size = self.vector_store._log_db_size()
-            else:
-                # Chroma 객체인 경우 직접 컬렉션 크기 확인
+            if hasattr(self.vector_store, '_check_db_status'):
+                return self.vector_store._check_db_status()
+            elif hasattr(self.vector_store, '_collection'):
                 collection = self.vector_store._collection
-                db_size = collection.count()
-                logger.info(f"벡터 DB 크기: {db_size}개 문서")
-                
-            if db_size == 0:
-                logger.warning("벡터 DB가 비어 있습니다. 문서를 추가해야 검색과 질의응답이 가능합니다.")
-                
-            return db_size
+                return collection.count()
+            else:
+                # 간단한 검색으로 DB 상태 확인
+                test_docs = self.vector_store.similarity_search("test", k=1)
+                return len(test_docs) if test_docs else 0
         except Exception as e:
-            logger.warning(f"벡터 DB 크기 확인 실패: {e}")
+            logger.warning(f"DB 상태 확인 실패: {e}")
             return 0
     
-    def _transform_query(self, question):
-        """효율적인 쿼리 변환"""
-        # 길이 제한
-        if len(question) > 300:
-            question = question[:300]
-            logger.info(f"쿼리 길이 제한: 300자로 자름")
+    def _clean_query(self, query: str) -> str:
+        """쿼리 정리 및 핵심 키워드 추출"""
+        # 기본 정리
+        query = query.strip()
         
-        # 1. 고유명사 질문 패턴 확인 (예: '홍길동이란?', '홍길동의 직업은?')
-        patterns = [
-            r'^([가-힣a-zA-Z0-9]{2,})[이가](\s)*(는|란|이란|가)(\s)*(무엇|뭐|뭔가|뭘까|누구|어디|언제).*$',
-            r'^([가-힣a-zA-Z0-9]{2,})의(\s)*(은|는|이|가|란).*$'
-        ]
+        # 너무 긴 쿼리는 자르기
+        if len(query) > 200:
+            query = query[:200]
         
-        for pattern in patterns:
-            match = re.match(pattern, question)
-            if match:
-                proper_noun = match.group(1)
-                if len(proper_noun) >= 2:
-                    logger.info(f"고유명사 추출: '{proper_noun}'")
-                    return proper_noun
-        
-        # 2. 키워드 추출
-        stopwords = ['은', '는', '이', '가', '을', '를', '에', '에서', '으로', '로', '하다', '되다', 
-                     '있다', '없다', '것', '그', '저', '이것', '저것', '그것', '무엇', '어떤', '어떻게']
-        
+        # 핵심 키워드 추출 - 더 정교하게
         keywords = []
         
-        # 중요한 패턴 추출 (조직명, 인명 등)
-        orgs = re.findall(r'[가-힣]{2,}(?:대학교|학교|기업|회사|조직|부서|팀)', question)
-        names = re.findall(r'[가-힣]{2,4}\s*(?:씨|님|교수|박사|학생)?', question)
-        keywords.extend(orgs)
-        keywords.extend(names)
+        # 1. 고유명사 패턴 (2글자 이상)
+        proper_nouns = re.findall(r'[가-힣]{2,}(?:대보름|달집태우기|행사|지원|지시)', query)
+        keywords.extend(proper_nouns)
         
-        # 일반 중요 단어 추출
-        words = re.findall(r'[가-힣a-zA-Z0-9]{2,}', question)
-        for word in words:
-            if word not in stopwords and word not in keywords:
-                keywords.append(word)
+        # 2. 일반 키워드 (2글자 이상)
+        general_words = re.findall(r'[가-힣a-zA-Z0-9]{2,}', query)
         
-        if keywords and len(keywords) <= 5:
-            query = ' '.join(keywords)
-            if len(query) < len(question) * 0.7:
-                logger.info(f"키워드 추출: '{query}'")
-                return query
+        # 불용어 제거 - 더 포괄적으로
+        stopwords = {
+            '은', '는', '이', '가', '을', '를', '에', '에서', '으로', '로', 
+            '하다', '되다', '있다', '없다', '것', '그', '저', '이것', '저것', '그것',
+            '무엇', '어떤', '어떻게', '언제', '어디', '누구', '왜', '어느',
+            '대한', '관한', '대해', '통해', '위한', '같은', '다른', '모든', '각각',
+            '또한', '그리고', '하지만', '그러나', '따라서', '그래서', '때문에'
+        }
         
-        # 3. LLM 기반 변환 (위 방법들이 실패한 경우)
+        meaningful_words = [w for w in general_words if w not in stopwords and len(w) >= 2]
+        
+        # 3. 중요도 기반 정렬
+        word_counts = Counter(meaningful_words)
+        
+        # 질문에서 중요한 단어들 우선 선택
+        important_words = []
+        for word, count in word_counts.most_common():
+            if word not in keywords:  # 중복 제거
+                important_words.append(word)
+        
+        # 최종 키워드 조합 (최대 8개)
+        final_keywords = (keywords + important_words)[:8]
+        
+        # 원본 질문이 짧으면 그대로 사용
+        if len(query) <= 50 and len(final_keywords) <= 3:
+            return query
+        
+        result = ' '.join(final_keywords) if final_keywords else query
+        logger.info(f"키워드 추출: '{query}' → '{result}'")
+        return result
+        
+    def _search_documents(self, query: str, k: int = 8) -> List[Document]:
+        """문서 검색 - 정확도 개선"""
         try:
-            start_time = time.time()
-            transformed = self.query_transform_chain.invoke({"question": question})
-            elapsed = time.time() - start_time
-            logger.info(f"LLM 쿼리 변환: '{transformed}' (소요 시간: {elapsed:.2f}초)")
+            logger.info(f"문서 검색: '{query}' (k={k})")
             
-            if transformed and len(transformed) < len(question) * 1.5:
-                return transformed
+            # DB 크기 확인
+            db_size = self._check_db_status()
+            if db_size == 0:
+                logger.warning("벡터 DB가 비어 있습니다")
+                return []
+            
+            k = min(k, db_size)
+            
+            # 1차 검색 - 더 많은 문서 검색
+            search_k = min(k * 3, 30)
+            
+            # 벡터 스토어에서 검색
+            if hasattr(self.vector_store, 'hierarchical_search'):
+                docs = self.vector_store.hierarchical_search(query, k=search_k)
+            elif hasattr(self.vector_store, 'similarity_search'):
+                docs = self.vector_store.similarity_search(query, k=search_k)
+            else:
+                logger.error("검색 메서드를 찾을 수 없습니다")
+                return []
+            
+            if not docs:
+                return []
+    
+            # 2차 필터링 - 키워드 매칭 기반
+            filtered_docs = self._advanced_filter_docs(docs, query)
+            
+            # 최종 결과 (상위 k개)
+            result = filtered_docs[:k]
+            
+            logger.info(f"검색 완료: {len(docs)}개 → 필터링 후 {len(filtered_docs)}개 → 최종 {len(result)}개")
+            return result
+            
         except Exception as e:
-            logger.error(f"LLM 쿼리 변환 실패: {e}")
-        
-        # 모든 방법 실패시 원본 반환
-        logger.info(f"원본 쿼리 사용: '{question}'")
-        return question
-    
-    def _setup_rag_chain(self):
-        """RAG 파이프라인 설정"""
-        # 문서 포맷 함수
-        def format_docs(docs):
-            formatted = []
-            for i, doc in enumerate(docs):
-                source = doc.metadata.get('source', '알 수 없는 출처')
-                # 실제 파일명/출처 정보를 사용
-                formatted.append(f"[{source}]\n{doc.page_content}")
-            return "\n\n".join(formatted)
-        
-        # 검색 체인 설정
-        retriever = self.vector_store.similarity_search
-        
-        # 전체 RAG 파이프라인
-        self.rag_chain = (
-            lambda x: {
-                "context": format_docs(retriever(self._transform_query(x["question"]), k=4)),
-                "question": x["question"]
-            }
-            | self.qa_prompt
-            | self.llm
-            | StrOutputParser()
-        )
-    
-    def _extract_sources_from_answer(self, answer, all_sources):
-        """답변에서 사용된 출처 추출 또는 답변과 문서 간 유사도 기반 출처 식별"""
-        # 이미 출처가 포함되어 있는지 확인
-        if "출처:" in answer or "출처 :" in answer:
-            return answer
-        
-        # "찾을 수 없습니다" 응답인 경우에도 출처 필요
-        if "찾을 수 없습니다" in answer or "없습니다" in answer:
-            # 참조된 모든 출처 포함
-            if all_sources:
-                sources_list = list(all_sources.keys())
-                sources_text = ", ".join([f"{s}" for s in sources_list])
-                return f"{answer}\n\n출처: {sources_text} (관련 정보 없음)"
-            return answer
-        
-        # 문서 내용과 답변 간 유사도 기반 출처 식별
-        most_relevant_sources = []
-        
-        # 답변에서 키워드 추출 (2글자 이상 단어)
-        answer_words = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', answer))
-        
-        # 각 문서와 답변 간 단어 중복 확인
-        for source, content in all_sources.items():
-            content_words = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', content))
-            # 교집합 단어 수 계산
-            overlap = len(answer_words.intersection(content_words))
-            overlap_ratio = overlap / len(answer_words) if answer_words else 0
+            logger.error(f"문서 검색 오류: {e}")
+            return []
             
-            # 유사도가 높은 문서 선택 (단어 10% 이상 중복 - 임계값 낮춤)
-            if overlap_ratio > 0.1:
-                most_relevant_sources.append(source)
-                logger.info(f"관련 출처 발견: {source} (유사도: {overlap_ratio:.2f})")
+    def _advanced_filter_docs(self, docs: List[Document], query: str) -> List[Document]:
+        """고급 문서 필터링"""
+        if not docs:
+            return []
         
-        # 관련 출처가 있으면 추가
-        if most_relevant_sources:
-            sources_text = ", ".join([f"{s}" for s in most_relevant_sources])
-            return f"{answer}\n\n출처: {sources_text}"
+        # 쿼리 키워드 추출
+        query_keywords = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', query.lower()))
         
-        # 관련 출처를 찾지 못했지만 답변이 생성된 경우 모든 출처 표시
-        if answer and all_sources:
-            sources_list = list(all_sources.keys())
-            sources_text = ", ".join([f"{s}" for s in sources_list])
-            return f"{answer}\n\n출처: {sources_text}"
+        scored_docs = []
+        for doc in docs:
+            doc_text = doc.page_content.lower()
+            
+            # 1. 정확한 키워드 매칭 점수
+            exact_matches = sum(1 for keyword in query_keywords if keyword in doc_text)
+            exact_score = exact_matches / len(query_keywords) if query_keywords else 0
+            
+            # 2. 부분 매칭 점수 (키워드의 일부가 포함된 경우)
+            partial_matches = 0
+            for keyword in query_keywords:
+                if len(keyword) >= 3:
+                    # 3글자 이상 키워드의 앞 2글자가 문서에 있는지 확인
+                    if keyword[:2] in doc_text:
+                        partial_matches += 0.5
+            
+            partial_score = partial_matches / len(query_keywords) if query_keywords else 0
+            
+            # 3. 문서 품질 점수
+            quality_score = doc.metadata.get('quality_score', 0.5)
+            
+            # 4. 문서 길이 점수 (너무 짧거나 길지 않은 문서 선호)
+            doc_length = len(doc.page_content)
+            if 100 <= doc_length <= 1500:
+                length_score = 1.0
+            elif 50 <= doc_length <= 2000:
+                length_score = 0.8
+            else:
+                length_score = 0.5
+            
+            # 5. 최종 점수 계산
+            final_score = (
+                exact_score * 0.4 +           # 정확한 매칭 40%
+                partial_score * 0.2 +         # 부분 매칭 20%
+                quality_score * 0.2 +         # 품질 20%
+                length_score * 0.2            # 길이 20%
+            )
+            
+            # 메타데이터에 점수 저장
+            doc.metadata['relevance_score'] = final_score
+            doc.metadata['exact_match_score'] = exact_score
+            doc.metadata['partial_match_score'] = partial_score
+            
+            # 최소 임계값 이상인 문서만 포함
+            if final_score >= 0.1:  # 임계값 낮춤
+                scored_docs.append((doc, final_score))
         
-        return answer
+        # 점수 기준 정렬
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        # 상위 문서들 반환
+        result = [doc for doc, score in scored_docs]
+        
+        # 로깅
+        if scored_docs:
+            top_score = scored_docs[0][1]
+            logger.info(f"필터링 결과: 최고 점수 {top_score:.3f}, {len(result)}개 문서 선택")
+        
+        return result
     
-    def query(self, question):
-        """RAG 체인을 통해 쿼리 실행"""
+    def _filter_relevant_docs(self, docs: List[Document], query: str) -> List[Document]:
+        """관련성 높은 문서만 필터링 - 더 엄격하게"""
+        if not docs:
+            return []
+        
+        # 이미 고급 필터링을 거쳤으므로 추가 필터링은 최소화
+        # 단지 relevance_score 기준으로 재정렬
+        docs_with_scores = [(doc, doc.metadata.get('relevance_score', 0)) for doc in docs]
+        docs_with_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # 상위 문서들만 선택 (최소 점수 0.15 이상)
+        filtered = [doc for doc, score in docs_with_scores if score >= 0.15]
+        
+        # 최소 1개는 보장 (검색 결과가 있다면)
+        if not filtered and docs:
+            filtered = [docs_with_scores[0][0]]
+        
+        return filtered[:self.max_documents]
+    
+    def _build_context(self, docs: List[Document]) -> str:
+        """컨텍스트 구성 - 관련 내용 우선 포함"""
+        if not docs:
+            return ""
+        
+        context_parts = []
+        for i, doc in enumerate(docs):
+            # 출처 정보 정리
+            source = doc.metadata.get('source', f'문서{i+1}')
+            if '/' in source:
+                source = source.split('/')[-1]
+            elif '\\' in source:
+                source = source.split('\\')[-1]
+                
+            # 점수 정보 (있는 경우만)
+            score_info = ""
+            relevance = doc.metadata.get('relevance_score')
+            if relevance is not None:
+                score_info = f" (관련성: {relevance:.2f})"
+            
+            # 문서 내용 - 자르지 않고 전체 사용 (최대 2000자까지)
+            content = doc.page_content
+            if len(content) > 2000:
+                content = content[:2000] + "..."
+            
+            context_parts.append(f"[{source}{score_info}]\n{content}")
+        
+        return "\n\n".join(context_parts)
+    
+    def _extract_sources(self, docs: List[Document], question: str = "") -> List[str]:
+        """출처 추출 - 실제 관련 내용이 있는 문서만"""
+        sources_with_scores = []
+        
+        # 질문에서 핵심 키워드 추출
+        question_keywords = set()
+        if question:
+            # 1. 기본 키워드 추출 (3글자 이상)
+            keywords = re.findall(r'[가-힣]{3,}', question.lower())
+            
+            # 2. 조사, 어미 제거하여 어근 추출
+            processed_keywords = []
+            for keyword in keywords:
+                # 일반적인 조사/어미 패턴 제거
+                if keyword.endswith(('에서', '에게', '에는', '에도', '에만')):
+                    processed_keywords.append(keyword[:-2])
+                elif keyword.endswith(('은', '는', '이', '가', '을', '를', '에', '로', '와', '과', '의', '도', '만', '부터', '까지', '에게', '한테')):
+                    processed_keywords.append(keyword[:-1])
+                elif keyword.endswith(('습니까', '습니다', '했습니까', '입니까')):
+                    # 의문사/존댓말 어미 제거
+                    if keyword.endswith('습니까'):
+                        processed_keywords.append(keyword[:-3])
+                    elif keyword.endswith('습니다'):
+                        processed_keywords.append(keyword[:-3])
+                    elif keyword.endswith('했습니까'):
+                        processed_keywords.append(keyword[:-4])
+                    elif keyword.endswith('입니까'):
+                        processed_keywords.append(keyword[:-3])
+                else:
+                    processed_keywords.append(keyword)
+            
+            # 3. 불용어 제거
+            stopwords = {'무엇', '어떤', '어떻게', '언제', '어디', '누구', '왜', '어느', '지시', '했', '바람'}
+            
+            # 4. 최종 키워드 선택 (2글자 이상, 불용어 제외)
+            final_keywords = [k for k in processed_keywords if len(k) >= 2 and k not in stopwords]
+            question_keywords = set(final_keywords)
+        
+        for doc in docs:
+            source = doc.metadata.get('source', 'unknown')
+            if '/' in source:
+                source = source.split('/')[-1]
+            elif '\\' in source:
+                source = source.split('\\')[-1]
+            
+            # 관련성 점수 기준으로 정렬
+            relevance_score = doc.metadata.get('relevance_score', 0)
+            
+            # 문서 내용에서 질문 키워드 매칭 확인
+            doc_text = doc.page_content.lower()
+            keyword_matches = 0
+            for keyword in question_keywords:
+                if keyword in doc_text:
+                    keyword_matches += 1
+            
+            # 키워드 매칭률 계산
+            keyword_match_rate = keyword_matches / len(question_keywords) if question_keywords else 0
+            
+            # 관련성이 높고 실제 키워드가 매칭되는 문서만 출처로 포함 (더 엄격하게)
+            if relevance_score >= 0.6 and keyword_match_rate >= 0.5:
+                # 출처 사용 횟수 증가
+                self.source_reliability[source]['count'] += 1
+                
+                # 관련성 점수로 신뢰도 업데이트
+                current_score = self.source_reliability[source]['score']
+                count = self.source_reliability[source]['count']
+                
+                # 가중 평균으로 신뢰도 업데이트
+                new_score = (current_score * (count - 1) + relevance_score) / count
+                self.source_reliability[source]['score'] = new_score
+                
+                sources_with_scores.append((source, relevance_score))
+        
+        # 관련성 점수 기준 정렬 및 중복 제거
+        unique_sources = {}
+        for source, score in sources_with_scores:
+            if source not in unique_sources or unique_sources[source] < score:
+                unique_sources[source] = score
+        
+        sorted_sources = sorted(unique_sources.items(), key=lambda x: x[1], reverse=True)
+        return [source for source, _ in sorted_sources[:1]]  # 가장 관련성 높은 1개만
+    
+    def _validate_relevance(self, docs: List[Document], query: str) -> bool:
+        """질문과 문서의 관련성 엄격 검증 - 개선된 버전"""
+        if not docs:
+            return False
+        
+        # 쿼리에서 핵심 키워드 추출 - 더 정교하게
+        query_lower = query.lower()
+        
+        # 1. 중요한 키워드들 (3글자 이상)
+        important_keywords = re.findall(r'[가-힣]{3,}', query_lower)
+        
+        # 2. 일반 키워드들 (2글자 이상)
+        general_keywords = re.findall(r'[가-힣a-zA-Z0-9]{2,}', query_lower)
+        
+        # 불용어 제거
+        stopwords = {
+            '은', '는', '이', '가', '을', '를', '에', '에서', '으로', '로', 
+            '하다', '되다', '있다', '없다', '것', '그', '저', '이것', '저것', '그것',
+            '무엇', '어떤', '어떻게', '언제', '어디', '누구', '왜', '어느',
+            '대한', '관한', '대해', '통해', '위한', '같은', '다른', '모든', '각각',
+            '또한', '그리고', '하지만', '그러나', '따라서', '그래서', '때문에',
+            '지시', '했습니까', '무엇입니까', '어떤', '위해'
+        }
+        
+        # 중요 키워드 우선, 일반 키워드 보조
+        filtered_important = [k for k in important_keywords if k not in stopwords]
+        filtered_general = [k for k in general_keywords if k not in stopwords and k not in filtered_important]
+        
+        # 최종 키워드 리스트 (중요 키워드 + 일반 키워드 상위 5개)
+        final_keywords = filtered_important + filtered_general[:5]
+        
+        if not final_keywords:
+            return True  # 키워드가 없으면 통과
+        
+        logger.info(f"검증 키워드: {final_keywords}")
+        
+        # 각 문서에서 키워드 매칭 확인
+        total_relevance = 0
+        for doc in docs:
+            doc_text = doc.page_content.lower()
+            
+            # 정확한 매칭
+            exact_matches = sum(1 for keyword in final_keywords if keyword in doc_text)
+            
+            # 부분 매칭 (키워드의 일부가 포함된 경우)
+            partial_matches = 0
+            for keyword in final_keywords:
+                if len(keyword) >= 4:
+                    # 4글자 이상 키워드의 앞 3글자가 문서에 있는지 확인
+                    if keyword[:3] in doc_text:
+                        partial_matches += 0.5
+                elif len(keyword) >= 3:
+                    # 3글자 키워드의 앞 2글자가 문서에 있는지 확인
+                    if keyword[:2] in doc_text:
+                        partial_matches += 0.3
+            
+            # 관련성 계산
+            relevance = (exact_matches + partial_matches) / len(final_keywords) if final_keywords else 0
+            total_relevance += relevance
+        
+        # 평균 관련성이 5% 이상이면 관련 있다고 판단 (매우 완화)
+        avg_relevance = total_relevance / len(docs) if docs else 0
+        
+        logger.info(f"관련성 검증: 키워드 {len(final_keywords)}개, 평균 관련성 {avg_relevance:.3f}")
+        
+        return avg_relevance >= 0.05
+    
+    def query(self, question: str) -> str:
+        """질문 처리 - 관련성 검증 강화"""
         start_time = time.time()
         
         try:
+            # 입력 검증
             if not question.strip():
                 return "질문을 입력해주세요."
             
-            # 벡터 DB 문서 개수 확인
-            db_size = self._check_vector_db_size()
-            if db_size == 0:
-                return "문서 데이터베이스가 비어 있습니다. 먼저 문서를 추가한 후 질문해주세요."
+            # 캐시 확인
+            cache_key = hashlib.md5(question.encode()).hexdigest()
+            if cache_key in self.query_cache:
+                logger.info(f"캐시에서 응답 반환: {question[:30]}...")
+                return self.query_cache[cache_key]
             
-            # 질문 전처리
-            processed_question = question.strip()
-            if not processed_question.endswith(("?", ".", "!", "요")):
-                processed_question += "?"
+            logger.info(f"질문 처리 시작: {question}")
             
-            logger.info(f"질문 처리 시작: '{processed_question}'")
+            # 1. 쿼리 정리
+            cleaned_query = self._clean_query(question)
+            logger.info(f"정리된 쿼리: {cleaned_query}")
             
-            # 변환된 쿼리로 문서 검색
-            transformed_query = self._transform_query(processed_question)
-            docs = self.vector_store.similarity_search(transformed_query, k=min(4, db_size))
+            # 2. 문서 검색
+            docs = self._search_documents(cleaned_query, k=min(5, self.max_documents))
             
-            # 문서를 찾지 못한 경우 원본 쿼리로 재시도
-            if not docs and transformed_query != processed_question:
-                logger.info("변환된 쿼리로 결과 없음, 원본 쿼리로 재시도")
-                docs = self.vector_store.similarity_search(processed_question, k=min(4, db_size))
-            
-            # 문서를 여전히 찾지 못한 경우
             if not docs:
-                logger.warning(f"검색 결과 없음: 문서를 찾을 수 없음")
-                return "죄송합니다. 질문과 관련된 문서를 찾을 수 없습니다. 다른 질문을 시도해보세요."
+                return "질문에 관련된 문서를 찾을 수 없습니다. 다른 질문을 시도하거나 문서를 추가해주세요."
             
-            # 문서 포맷팅 및 출처 정보 수집
-            context = ""
-            all_sources = {}  # 출처와 문서 내용을 매핑
+            logger.info(f"검색된 문서: {len(docs)}개")
             
-            logger.info(f"검색 성공: {len(docs)}개 관련 문서 발견")
+            # 3. 관련성 엄격 검증 - 다시 활성화
+            if not self._validate_relevance(docs, question):
+                return "제공된 문서에서 해당 정보를 찾을 수 없습니다."
             
-            for i, doc in enumerate(docs):
-                source = doc.metadata.get('source', '알 수 없는 출처')
-                # 출처 이름에서 경로 부분 제거하고 파일명만 추출
-                if isinstance(source, str) and '/' in source:
-                    source = source.split('/')[-1]
-                elif isinstance(source, str) and '\\' in source:
-                    source = source.split('\\')[-1]
-                
-                context += f"[{source}]\n{doc.page_content}\n\n"
-                all_sources[source] = doc.page_content
+            # 4. 관련성 필터링 - 상위 2개만 선택
+            filtered_docs = self._filter_relevant_docs(docs, cleaned_query)[:2]
             
-            # QA 프롬프트 실행
-            final_prompt = self.qa_prompt.format(question=processed_question, context=context)
+            if not filtered_docs:
+                return "제공된 문서에서 해당 정보를 찾을 수 없습니다."
             
-            # 답변 생성
-            logger.info("LLM을 통한 답변 생성 시작")
-            answer = self.llm.invoke(final_prompt)
+            logger.info(f"필터링된 문서: {len(filtered_docs)}개")
             
-            # 출처 확인 및 처리
-            final_answer = self._extract_sources_from_answer(answer, all_sources)
+            # 5. 컨텍스트 구성
+            context = self._build_context(filtered_docs)
             
-            # 실행 시간 기록
+            # 6. 답변 생성
+            response = self.qa_chain.invoke({
+                "question": question,
+                "context": context
+            })
+            
+            # 7. 답변 검증 - "찾을 수 없다"는 답변이 아닌 경우에만 출처 추가
+            if "찾을 수 없" not in response and "없습니다" not in response:
+                sources = self._extract_sources(filtered_docs, question)
+                if sources and "출처:" not in response:
+                    sources_text = ", ".join(sources)
+                    response = f"{response}\n\n출처: {sources_text}"
+                elif not sources and "출처:" not in response:
+                    # 출처가 없어도 문서에서 답변을 생성했다면 가장 관련성 높은 1개 문서만 출처로 추가
+                    if filtered_docs:
+                        # 가장 관련성 높은 문서 1개만 선택
+                        best_doc = max(filtered_docs, key=lambda x: x.metadata.get('relevance_score', 0))
+                        source = best_doc.metadata.get('source', '')
+                        if source and source != '알 수 없음':
+                            if '/' in source:
+                                source = source.split('/')[-1]
+                            elif '\\' in source:
+                                source = source.split('\\')[-1]
+                            response = f"{response}\n\n출처: {source}"
+            
+            # 8. 캐시 저장
+            if len(self.query_cache) >= self.max_cache_size:
+                # 가장 오래된 항목 제거
+                oldest_key = next(iter(self.query_cache))
+                del self.query_cache[oldest_key]
+            
+            self.query_cache[cache_key] = response
+            
             elapsed = time.time() - start_time
-            logger.info(f"쿼리 처리 완료, 소요 시간: {elapsed:.2f}초")
+            logger.info(f"질문 처리 완료: {elapsed:.2f}초")
             
-            return final_answer
+            return response
             
         except Exception as e:
             elapsed = time.time() - start_time
-            logger.error(f"RAG 체인 쿼리 오류: {e}, 소요 시간: {elapsed:.2f}초")
+            logger.error(f"질문 처리 오류: {e}, 소요시간: {elapsed:.2f}초")
             return f"죄송합니다. 질문 처리 중 오류가 발생했습니다: {str(e)}"
     
-    def summarize(self, document):
+    def summarize(self, document: str) -> str:
         """문서 요약"""
         try:
             if not document.strip():
                 return "요약할 내용이 없습니다."
             
-            result = self.summarize_chain.invoke({"document": document})
-            return result
+            # 문서가 너무 길면 앞부분만 사용
+            if len(document) > 3000:
+                document = document[:3000] + "..."
+            
+            return self.summarize_chain.invoke({"document": document})
+            
         except Exception as e:
             logger.error(f"문서 요약 오류: {e}")
-            return "죄송합니다. 문서 요약 중 오류가 발생했습니다. 다시 시도해주세요." 
+            return "문서 요약 중 오류가 발생했습니다."
+                
+    def clear_cache(self):
+        """캐시 초기화"""
+        self.query_cache.clear()
+        logger.info("캐시가 초기화되었습니다.")
+    
+    def get_source_reliability(self) -> Dict[str, Dict]:
+        """출처 신뢰도 정보 반환"""
+        return dict(self.source_reliability)
+
+# 하위 호환성을 위한 별칭
+RAGChain = SimpleRAGChain 
