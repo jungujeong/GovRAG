@@ -62,7 +62,7 @@ class SimpleRAGChain:
         except Exception as e:
             logger.error(f"LLM 초기화 오류: {e}")
             raise
-    
+        
     def _initialize_prompts(self):
         """프롬프트 초기화"""
         # 메인 QA 프롬프트 - 매우 직접적이고 강력하게
@@ -158,7 +158,7 @@ class SimpleRAGChain:
         result = ' '.join(final_keywords) if final_keywords else query
         logger.info(f"키워드 추출: '{query}' → '{result}'")
         return result
-    
+        
     def _search_documents(self, query: str, k: int = 8) -> List[Document]:
         """문서 검색 - 정확도 개선"""
         try:
@@ -186,7 +186,7 @@ class SimpleRAGChain:
             
             if not docs:
                 return []
-            
+    
             # 2차 필터링 - 키워드 매칭 기반
             filtered_docs = self._advanced_filter_docs(docs, query)
             
@@ -199,7 +199,7 @@ class SimpleRAGChain:
         except Exception as e:
             logger.error(f"문서 검색 오류: {e}")
             return []
-    
+            
     def _advanced_filter_docs(self, docs: List[Document], query: str) -> List[Document]:
         """고급 문서 필터링"""
         if not docs:
@@ -300,7 +300,7 @@ class SimpleRAGChain:
                 source = source.split('/')[-1]
             elif '\\' in source:
                 source = source.split('\\')[-1]
-            
+                
             # 점수 정보 (있는 경우만)
             score_info = ""
             relevance = doc.metadata.get('relevance_score')
@@ -521,6 +521,21 @@ class SimpleRAGChain:
                 if sources and "출처:" not in response:
                     sources_text = ", ".join(sources)
                     response = f"{response}\n\n출처: {sources_text}"
+                elif not sources and "출처:" not in response:
+                    # 출처가 없어도 문서에서 답변을 생성했다면 기본 출처 추가
+                    default_sources = []
+                    for doc in filtered_docs[:2]:  # 상위 2개 문서에서 출처 추출
+                        source = doc.metadata.get('source', '')
+                        if source and source != '알 수 없음':
+                            if '/' in source:
+                                source = source.split('/')[-1]
+                            elif '\\' in source:
+                                source = source.split('\\')[-1]
+                            default_sources.append(source)
+                    
+                    if default_sources:
+                        sources_text = ", ".join(list(set(default_sources)))  # 중복 제거
+                        response = f"{response}\n\n출처: {sources_text}"
             
             # 8. 캐시 저장
             if len(self.query_cache) >= self.max_cache_size:
@@ -555,7 +570,7 @@ class SimpleRAGChain:
         except Exception as e:
             logger.error(f"문서 요약 오류: {e}")
             return "문서 요약 중 오류가 발생했습니다."
-    
+                
     def clear_cache(self):
         """캐시 초기화"""
         self.query_cache.clear()
