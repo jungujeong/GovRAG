@@ -10,6 +10,14 @@ import platform
 from config import DOCUMENTS_PATH, logger
 import fitz  # PyMuPDF
 import streamlit as st
+import pymupdf
+from table_utils import pad_row, split_row
+
+# ──────────────────── (1) 새 헬퍼 함수 · 파일 상단 임포트 아래 ────────────────────
+def _pad_row(row, length):
+    """행(row)의 셀 개수가 헤더보다 짧으면 '' 로 패딩해 길이를 맞춘다."""
+    return row + [""] * (length - len(row))
+
 
 # HWP Linux/Mac OS 지원을 위한 hwplib 임포트
 try:
@@ -40,28 +48,43 @@ class DocumentProcessor:
         st.session_state.processing_errors = {}    # 오류 발생 파일
     
     def process_hwp_file(self, file_path):
-        """hwplib를 사용하여 HWP 파일 처리"""
+        """
+        hwplib를 사용하여 HWP 파일에서 텍스트 + (셀마다 marker 가 붙은) 표를 추출
+        """
         try:
-            # 경로가 Path 객체인 경우 문자열로 변환
-            if isinstance(file_path, Path):
-                file_path = str(file_path)
-                
-            # 절대 경로로 변환
-            file_path = os.path.abspath(file_path)
+            file_path = str(Path(file_path).absolute())
             logger.info(f"hwplib로 HWP 처리 중, 절대 경로: {file_path}")
-            
+
             if not self.hwp_extractor:
                 logger.error("hwplib가 초기화되지 않았습니다.")
                 return "HWP 처리 모듈이 초기화되지 않았습니다."
-                
-            text = self.hwp_extractor.extract_text(file_path)
-            
-            if text and len(text.strip()) > 0:
+
+            # ── 1) 일반 본문 텍스트 ────────────────────────────────
+            text = self.hwp_extractor.extract_text(file_path).strip()
+
+            # ── 2) 표를 셀마다 marker 로 감싸 추출 ────────────────
+            try:
+                tables = self.hwp_extractor.extract_tables_with_marker(
+                    file_path, marker=marker
+                )
+                if tables:
+                    table_blocks = []
+                    for tbl in tables:
+                        # 행 → 탭(\t) / 행 끝 → 뉴라인(\n) 형식으로 직렬화
+                        table_blocks.append(
+                            "\n".join(["\t".join(row) for row in tbl])
+                        )
+                    tables_text = "\n\n".join(table_blocks)
+                    text += f"\n\n=== MARKED TABLES ===\n{tables_text}"
+            except Exception as e:
+                logger.warning(f"표 추출 중 오류(무시): {e}")
+
+            if text:
                 return text
             else:
                 logger.error("추출된 텍스트가 없습니다.")
                 return "텍스트 추출 실패"
-                
+
         except Exception as e:
             logger.error(f"HWP 파일 처리 중 오류: {e}")
             return f"HWP 파일 처리 오류: {str(e)}"
@@ -85,28 +108,42 @@ class DocumentProcessor:
             return ""
     
     def process_pdf(self, file_path):
-        """PDF 파일에서 텍스트 추출"""
+        """
+        PDF → 한 줄 직렬화 텍스트
+        (지시사항 셀은 날짜--○ 계층을 한 줄로 병합)
+        """
         try:
-            # 경로가 Path 객체인 경우 문자열로 변환
-            if isinstance(file_path, Path):
-                file_path = str(file_path)
-                
-            # 절대 경로로 변환
-            file_path = os.path.abspath(file_path)
-            
-            # PDF 파일 열기
+            file_path = os.path.abspath(str(file_path))
             doc = fitz.open(file_path)
-            
-            # 모든 페이지의 텍스트 추출
-            text = ""
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                text += page.get_text()
-            
-            # 문서 닫기
+
+            lines = []                                 # 직렬화된 행
+            for page in doc:
+                tlist = page.find_tables(strategy="lines")
+                if not tlist or not tlist.tables:
+                    continue
+
+                for tab in tlist.tables:
+                    rows = tab.extract()
+                    if not rows:
+                        continue
+
+                    headers = [h.replace("\n", "").strip() for h in rows[0]]
+                    col_cnt = len(headers)
+                    text_idx = headers.index("지시사항") if "지시사항" in headers else 2
+
+                    for raw in rows[1:]:               # 헤더 제외
+                        base = pad_row(raw, col_cnt)   # 열 수 보정
+                        for r in split_row(base, headers, text_idx):
+                            # 컬럼:값 형태로 직렬화
+                            pair = [
+                                f"{headers[i]}:{v.strip()}"
+                                for i, v in enumerate(r) if v.strip()
+                            ]
+                            lines.append(", ".join(pair))
+
             doc.close()
-            
-            return text
+            return "\n".join(lines)
+
         except Exception as e:
             logger.error(f"PDF 파일 처리 중 오류: {e}")
             return ""
@@ -142,7 +179,7 @@ class DocumentProcessor:
         
         # PDF 파일 처리
         elif file_ext == '.pdf':
-            text = self.process_pdf(file_path)
+            text = self.process_pdf(file_path)                        # tables 메타에 포함
             return text, metadata
         
         # 텍스트 파일 처리
