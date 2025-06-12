@@ -88,6 +88,9 @@ class EnhancedVectorStore:
         # 검색 성능 추적
         self.search_stats = defaultdict(int)
         
+        # 서버 재시작 시 기존 문서들로 BM25 인덱스 재구성
+        self._load_existing_documents()
+        
         logger.info("개선된 벡터 스토어 초기화 완료")
     
     def _initialize_chroma(self):
@@ -111,6 +114,52 @@ class EnhancedVectorStore:
         except Exception as e:
             logger.error(f"ChromaDB 초기화 실패: {e}")
             raise
+    
+    def _load_existing_documents(self):
+        """서버 재시작 시 기존 문서들을 로드하여 BM25 인덱스 재구성"""
+        try:
+            # ChromaDB에서 모든 문서 가져오기
+            collection = self.vector_store._collection
+            all_data = collection.get()
+            
+            if not all_data or not all_data.get('documents'):
+                logger.info("기존 문서가 없습니다.")
+                return
+            
+            # Document 객체로 변환
+            existing_documents = []
+            documents = all_data.get('documents', [])
+            metadatas = all_data.get('metadatas', [])
+            
+            for i, doc_text in enumerate(documents):
+                metadata = metadatas[i] if i < len(metadatas) else {}
+                doc = Document(page_content=doc_text, metadata=metadata)
+                existing_documents.append(doc)
+            
+            if existing_documents:
+                # BM25 인덱스 재구성을 위해 문서 리스트 업데이트
+                self.documents = existing_documents
+                
+                # 모든 문서의 텍스트 수집
+                all_texts = [doc.page_content for doc in self.documents]
+                
+                # BM25용 토큰화된 텍스트
+                tokenized_texts = [self._preprocess_text_for_bm25(text) for text in all_texts]
+                self.document_texts = tokenized_texts
+                
+                # BM25 인덱스 재구성
+                if tokenized_texts:
+                    self.bm25 = BM25Okapi(tokenized_texts)
+                
+                # TF-IDF 매트릭스 재구성
+                if all_texts:
+                    self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_texts)
+                
+                logger.info(f"기존 문서 로드 및 BM25 인덱스 재구성 완료: {len(existing_documents)}개 문서")
+            
+        except Exception as e:
+            logger.warning(f"기존 문서 로드 실패 (계속 진행): {e}")
+            # 실패해도 계속 진행 - 새로운 문서 추가는 정상 동작
     
     def _tokenize_korean(self, text: str) -> List[str]:
         """한국어 텍스트 토큰화"""
@@ -182,6 +231,55 @@ class EnhancedVectorStore:
             
         except Exception as e:
             logger.error(f"키워드 검색 데이터 업데이트 실패: {e}")
+    
+    def _rebuild_indexes_from_chromadb(self):
+        """ChromaDB의 전체 문서로부터 인덱스 재구성"""
+        try:
+            # ChromaDB에서 모든 문서 가져오기
+            collection = self.vector_store._collection
+            all_data = collection.get()
+            
+            if not all_data or not all_data.get('documents'):
+                logger.info("ChromaDB에 문서가 없습니다.")
+                self.documents = []
+                self.bm25 = None
+                self.document_texts = []
+                self.tfidf_matrix = None
+                return
+            
+            # Document 객체로 변환
+            all_documents = []
+            documents = all_data.get('documents', [])
+            metadatas = all_data.get('metadatas', [])
+            
+            for i, doc_text in enumerate(documents):
+                metadata = metadatas[i] if i < len(metadatas) else {}
+                doc = Document(page_content=doc_text, metadata=metadata)
+                all_documents.append(doc)
+            
+            # 문서 리스트 전체 교체
+            self.documents = all_documents
+            
+            # 모든 문서의 텍스트 수집
+            all_texts = [doc.page_content for doc in self.documents]
+            
+            # BM25용 토큰화된 텍스트
+            tokenized_texts = [self._preprocess_text_for_bm25(text) for text in all_texts]
+            self.document_texts = tokenized_texts
+            
+            # BM25 인덱스 재구성
+            if tokenized_texts:
+                self.bm25 = BM25Okapi(tokenized_texts)
+            
+            # TF-IDF 매트릭스 재구성
+            if all_texts:
+                self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_texts)
+            
+            logger.info(f"ChromaDB 기반 인덱스 전체 재구성 완료: {len(all_documents)}개 문서")
+            
+        except Exception as e:
+            logger.error(f"ChromaDB 기반 인덱스 재구성 실패: {e}")
+            raise
     
     def hybrid_search(self, query: str, k: int = 10, 
                      vector_weight: float = 0.7, 
