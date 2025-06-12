@@ -8,6 +8,22 @@ import queue
 import uuid
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+import warnings
+
+# PyTorch와 Streamlit 간 호환성 문제로 인한 경고 억제
+warnings.filterwarnings("ignore", message=".*torch.*classes.*")
+warnings.filterwarnings("ignore", message=".*no running event loop.*")
+warnings.filterwarnings("ignore", message=".*ScriptRunContext.*")
+
+# 환경 변수로도 PyTorch 경고 억제
+os.environ['PYTHONWARNINGS'] = 'ignore'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # transformers 라이브러리 경고 억제
+
+# 특정 라이브러리 로깅 레벨 조정
+import logging
+logging.getLogger('torch').setLevel(logging.ERROR)
+logging.getLogger('streamlit').setLevel(logging.ERROR)
+logging.getLogger('watchdog').setLevel(logging.ERROR)
 
 from utils import DocumentProcessor, VectorStore, RAGChain
 from config import DOCUMENTS_PATH, logger, OLLAMA_MODEL, set_session_context
@@ -124,6 +140,25 @@ st.markdown(
     .chat-message .message {
         flex-grow: 1;
     }
+    .stats-container {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #007acc;
+        color: #333333 !important;
+        margin: 0.5rem 0;
+    }
+    .stats-container h4 {
+        color: #333333 !important;
+        margin-bottom: 0.5rem;
+    }
+    .stats-container p {
+        color: #333333 !important;
+        margin-bottom: 0.3rem;
+    }
+    .stats-container strong {
+        color: #2c3e50 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -132,7 +167,15 @@ st.markdown(
 # Function to add new document to vector store
 def add_document_to_vectorstore(file_path, file_name):
     try:
-        # 새로운 process_document 메서드를 사용하여 텍스트 추출 및 요약
+        # 1. 기존 문서 확인 및 삭제 (중복 처리)
+        try:
+            success = vector_store.delete_document(file_name)
+            if success:
+                logger.info(f"기존 문서 '{file_name}' 삭제 완료")
+        except Exception as e:
+            logger.warning(f"기존 문서 삭제 중 오류 (계속 진행): {e}")
+        
+        # 2. 새로운 process_document 메서드를 사용하여 텍스트 추출 및 요약
         text, summary = document_processor.process_document(file_path)
         
         # 텍스트 추출 실패 시 
@@ -297,7 +340,7 @@ def process_documents_thread(session_id, user_id):
 # 처리 결과 확인 함수
 def check_processing_results():
     """
-    결과 큐에서 처리 결과를 확인하고 상태를 업데이트하는 함수
+    결과 큐에서 처리 결과를 확인하고 상태를 업데이트하는 함수 (스레드 안전)
     """
     update_needed = False
     processed_count = 0
@@ -311,11 +354,14 @@ def check_processing_results():
             # 완료 신호인 경우 처리
             if "status" in result and result["status"] == "complete":
                 logger.info("처리 완료 신호 수신")
-                # 처리 상태 완료로 변경
-                st.session_state.processing_done = True
-                st.session_state.processing_complete = True
-                st.session_state.check_processing = False
-                st.session_state.last_processing_time = result.get("timestamp", time.time())
+                # 처리 상태 완료로 변경 (방어적 코딩)
+                try:
+                    st.session_state.processing_done = True
+                    st.session_state.processing_complete = True
+                    st.session_state.check_processing = False
+                    st.session_state.last_processing_time = result.get("timestamp", time.time())
+                except Exception as e:
+                    logger.warning(f"세션 상태 업데이트 중 오류 (무시됨): {e}")
                 return True, "complete"
             
             # 파일 처리 결과인 경우
@@ -324,27 +370,35 @@ def check_processing_results():
             error = result.get("error")
             timestamp = result.get("timestamp", time.time())
             
-            # 마지막 처리 시간 갱신
-            st.session_state.last_processing_time = timestamp
+            # 마지막 처리 시간 갱신 (방어적 코딩)
+            try:
+                st.session_state.last_processing_time = timestamp
+            except Exception as e:
+                logger.warning(f"처리 시간 업데이트 중 오류 (무시됨): {e}")
             
-            # 파일 상태 업데이트
-            if file_name and file_name in st.session_state.processing_files:
-                st.session_state.processing_files.remove(file_name)
-                
-                if success:
-                    st.session_state.processed_files.add(file_name)
-                    processed_count += 1
-                    logger.info(f"파일 '{file_name}' 처리 결과 업데이트: 성공")
-                else:
-                    st.session_state.processing_errors[file_name] = error or "알 수 없는 오류"
-                    error_count += 1
-                    logger.warning(f"파일 '{file_name}' 처리 결과 업데이트: 실패 ({error})")
+            # 파일 상태 업데이트 (방어적 코딩)
+            try:
+                if file_name and hasattr(st.session_state, 'processing_files') and file_name in st.session_state.processing_files:
+                    st.session_state.processing_files.remove(file_name)
+                    
+                    if success:
+                        st.session_state.processed_files.add(file_name)
+                        processed_count += 1
+                        logger.info(f"파일 '{file_name}' 처리 결과 업데이트: 성공")
+                    else:
+                        st.session_state.processing_errors[file_name] = error or "알 수 없는 오류"
+                        error_count += 1
+                        logger.warning(f"파일 '{file_name}' 처리 결과 업데이트: 실패 ({error})")
+            except Exception as e:
+                logger.warning(f"파일 상태 업데이트 중 오류 (무시됨): {e}")
             
             update_needed = True
             
         except queue.Empty:
             # 큐가 비어있으면 종료
             break
+        except Exception as e:
+            logger.warning(f"결과 처리 중 예외 발생 (무시됨): {e}")
     
     return update_needed, processed_count
 
@@ -624,26 +678,53 @@ if st.session_state.check_processing:
         st.rerun()
 
 # Document management section
-with st.sidebar.expander("문서 관리", expanded=True):
-    doc_list = document_processor.list_documents()
-    
-    if doc_list:
-        st.write(f"총 {len(doc_list)}개 문서")
+with st.sidebar.expander("📄 저장된 문서", expanded=True):
+    try:
+        # 벡터 DB에서 문서 정보 가져오기
+        doc_info = vector_store.get_metrics()
+        total_docs = doc_info.get('total_documents', 0)
         
-        # List documents with delete buttons
-        for doc in doc_list:
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.write(doc)
-            with col2:
-                if st.button("삭제", key=f"delete_{doc}"):
-                    if document_processor.delete_document(doc, vector_store=vector_store):
-                        st.success(f"{doc} 삭제 완료")
-                        st.rerun()
-                    else:
-                        st.error(f"{doc} 삭제 실패")
-    else:
-        st.write("문서가 없습니다.")
+        if total_docs > 0:
+            st.markdown(
+                f"""
+                <div class="stats-container">
+                    <h4>📊 문서 현황</h4>
+                    <p><strong>총 문서 수:</strong> {total_docs}</p>
+                    <p><strong>총 청크 수:</strong> {doc_info.get('total_chunks', 0)}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # 파일 시스템의 문서 목록
+            doc_list = document_processor.list_documents()
+            
+            if doc_list:
+                for doc in doc_list:
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        # 벡터 DB에 존재하는지 확인
+                        doc_info_detail = vector_store.get_document_info(doc)
+                        if doc_info_detail:
+                            chunks = doc_info_detail.get('chunks', 0)
+                            quality = doc_info_detail.get('quality_score', 0)
+                            st.markdown(f"📄 **{doc}**  \n<small>청크: {chunks}개, 품질: {quality:.2f}</small>", unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"📄 **{doc}**  \n<small>벡터 DB에 없음</small>", unsafe_allow_html=True)
+                    with col2:
+                        if st.button("🗑️", key=f"delete_{doc}", help=f"{doc} 삭제"):
+                            if document_processor.delete_document(doc, vector_store=vector_store):
+                                st.success(f"✅ {doc} 삭제 완료")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {doc} 삭제 실패")
+            else:
+                st.info("파일 시스템에 문서가 없습니다.")
+        else:
+            st.info("📭 저장된 문서가 없습니다.")
+    
+    except Exception as e:
+        st.error(f"문서 목록 조회 실패: {e}")
 
 # Document summarization
 with st.sidebar.expander("문서 요약", expanded=True):
