@@ -71,7 +71,15 @@ session_defaults = {
     "last_processing_time": time.time(),
     "uploader_key": "file_uploader_1",
     "thread_executor": None,
-    "enhanced_mode": True
+    "enhanced_mode": True,
+    "document_summaries": {},  # 문서 요약 캐시
+    "selected_document": None,  # 선택된 문서
+    "show_document_preview": False,  # 문서 미리보기 표시 여부
+    "debug_mode": False,  # 디버깅 모드
+    "is_generating_response": False,  # 답변 생성 중 여부
+    "debug_text_display": None,  # 디버그 텍스트 표시
+    "debug_text_type": None,  # 디버그 텍스트 타입
+    "debug_text_title": None  # 디버그 텍스트 제목
 }
 
 for key, default_value in session_defaults.items():
@@ -247,18 +255,22 @@ st.markdown(
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 1rem;
+        padding: 1.2rem;
         border-bottom: 1px solid #f1f3f4;
-        border-radius: 8px;
-        margin-bottom: 0.5rem;
-        background: #fafbfc;
-        transition: all 0.2s ease;
+        border-radius: 10px;
+        margin-bottom: 0.8rem;
+        background: linear-gradient(135deg, #fafbfc 0%, #f8f9fa 100%);
+        transition: all 0.3s ease;
+        min-height: 80px;
+        border: 1px solid #e9ecef;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
     }
     
     .file-item:hover {
-        background: #f0f2f5;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        background: linear-gradient(135deg, #f0f2f5 0%, #e8eaf6 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        border-color: #667eea;
     }
     
     .file-item:last-child {
@@ -271,22 +283,27 @@ st.markdown(
         color: #2c3e50 !important;
         font-size: 0.95rem !important;
         line-height: 1.4;
+        padding-right: 1rem;
     }
     
     .file-name strong {
         color: #495057 !important;
         font-weight: 600 !important;
+        font-size: 1rem !important;
     }
     
     .file-name small {
         color: #6c757d !important;
         font-size: 0.85rem !important;
+        display: block;
+        margin-top: 0.3rem;
     }
     
     .file-actions {
         display: flex;
         gap: 0.5rem;
         align-items: center;
+        flex-wrap: wrap;
     }
     
     /* 상태 표시 */
@@ -328,6 +345,55 @@ st.markdown(
         border-radius: 8px;
         border: 2px dashed #dee2e6;
         background: #fafbfc;
+    }
+    
+    /* 문서 미리보기 컨테이너 */
+    .document-preview {
+        background: linear-gradient(135deg, #f8f9ff 0%, #e8f0ff 100%);
+        border: 1px solid #d1ecf1;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.1);
+    }
+    
+    .document-preview h4 {
+        color: #2c3e50 !important;
+        margin-bottom: 1rem !important;
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .document-preview .summary-content {
+        background: white;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #007bff;
+        color: #2c3e50;
+        line-height: 1.6;
+        font-size: 0.95rem;
+    }
+    
+    /* 디버그 컨테이너 */
+    .debug-container {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        font-family: 'Courier New', monospace;
+        font-size: 0.85rem;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .debug-container pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
     }
     </style>
     """,
@@ -469,6 +535,59 @@ def process_documents_thread_enhanced(session_id, user_id, files_to_process_list
         logger.error(f"문서 처리 스레드 오류: {e}")
     finally:
         processing_done_flag.set()
+
+def get_document_summary(doc_name: str) -> str:
+    """문서 요약 생성 (캐시 적용)"""
+    try:
+        # 캐시에서 확인
+        if doc_name in st.session_state.document_summaries:
+            return st.session_state.document_summaries[doc_name]
+        
+        # ChromaDB에서 해당 문서의 모든 청크 가져오기
+        collection = vector_store.vector_store._collection
+        results = collection.get(where={"source": doc_name})
+        
+        if not results.get('documents'):
+            return "문서 내용을 찾을 수 없습니다."
+        
+        # 모든 청크 내용을 합쳐서 전체 텍스트 구성
+        full_text = "\n\n".join(results['documents'])
+        
+        # 너무 긴 경우 앞부분만 사용 (요약용)
+        if len(full_text) > 5000:
+            full_text = full_text[:5000] + "..."
+        
+        # RAG 체인을 통한 요약 생성
+        summary = rag_chain.summarize_document(full_text)
+        
+        # 캐시에 저장
+        st.session_state.document_summaries[doc_name] = summary
+        
+        return summary
+        
+    except Exception as e:
+        logger.error(f"문서 요약 생성 실패: {e}")
+        return f"요약 생성 중 오류가 발생했습니다: {str(e)}"
+
+def get_document_full_text(doc_name: str) -> str:
+    """문서 전체 텍스트 가져오기 (디버깅용)"""
+    try:
+        collection = vector_store.vector_store._collection
+        results = collection.get(where={"source": doc_name})
+        
+        if not results.get('documents'):
+            return "문서 내용을 찾을 수 없습니다."
+        
+        # 모든 청크를 번호와 함께 표시
+        full_text_parts = []
+        for i, chunk in enumerate(results['documents'], 1):
+            full_text_parts.append(f"=== 청크 {i} ===\n{chunk}\n")
+        
+        return "\n".join(full_text_parts)
+        
+    except Exception as e:
+        logger.error(f"전체 텍스트 조회 실패: {e}")
+        return f"텍스트 조회 중 오류가 발생했습니다: {str(e)}"
 
 # 사이드바 설정
 with st.sidebar:
@@ -723,32 +842,33 @@ with st.sidebar:
                 unsafe_allow_html=True
             )
             
-            # 각 문서별로 표시 및 삭제 버튼
+            # 각 문서별로 표시 및 액션 버튼들
             for doc_name, doc_info in documents.items():
-                col1, col2 = st.columns([4, 1])
+                # 파일 확장자에 따른 아이콘
+                if doc_name.lower().endswith('.pdf'):
+                    file_icon = "📄"
+                elif doc_name.lower().endswith('.hwp'):
+                    file_icon = "📝"
+                elif doc_name.lower().endswith(('.txt', '.md')):
+                    file_icon = "📃"
+                else:
+                    file_icon = "📄"
+                
+# 파일 아이템을 더 간단하게 표시
+                
+                # 클릭 가능한 파일명과 삭제 버튼
+                col1, col2 = st.columns([5, 1])
                 
                 with col1:
-                    # 파일 확장자에 따른 아이콘
-                    if doc_name.lower().endswith('.pdf'):
-                        file_icon = "📄"
-                    elif doc_name.lower().endswith('.hwp'):
-                        file_icon = "📝"
-                    elif doc_name.lower().endswith(('.txt', '.md')):
-                        file_icon = "📃"
-                    else:
-                        file_icon = "📄"
+                    # 클릭 가능한 파일명 버튼
+                    if st.button(f"{file_icon} {doc_name}", key=f"select_{doc_name}", help=f"{doc_name} 클릭하여 요약 보기", use_container_width=True):
+                        # 문서 요약을 채팅 상단에 표시
+                        st.session_state.selected_document = doc_name
+                        st.session_state.show_document_preview = True
+                        st.rerun()
                     
-                    st.markdown(
-                        f"""
-                        <div class="file-item">
-                            <div class="file-name">
-                                {file_icon} <strong>{doc_name}</strong><br>
-                                <small>청크: {doc_info['chunk_count']}개 | 타입: {doc_info['file_type'].upper()}</small>
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+                    # 파일 정보 표시
+                    st.caption(f"청크: {doc_info['chunk_count']}개 | 타입: {doc_info['file_type'].upper()}")
                 
                 with col2:
                     if st.button("🗑️", key=f"delete_{doc_name}", help=f"{doc_name} 삭제", use_container_width=True):
@@ -757,13 +877,19 @@ with st.sidebar:
                             delete_results = collection.get(where={"source": doc_name})
                             if delete_results.get('ids'):
                                 collection.delete(ids=delete_results['ids'])
-                                st.success(f"✅ {doc_name} 삭제 완료")
+                                # 캐시에서도 제거
+                                if doc_name in st.session_state.document_summaries:
+                                    del st.session_state.document_summaries[doc_name]
+                                st.success("✅")
                                 time.sleep(1)
                                 st.rerun()
                             else:
                                 st.warning(f"⚠️ {doc_name}을 찾을 수 없습니다")
                         except Exception as e:
                             st.error(f"❌ 삭제 실패: {e}")
+                
+                # 각 문서 사이에 작은 간격 추가
+                st.markdown("")
         else:
             st.markdown(
                 """
@@ -779,6 +905,206 @@ with st.sidebar:
     except Exception as e:
         st.error(f"문서 목록 조회 실패: {e}")
     
+    # 디버깅 도구 섹션
+    st.divider()
+    st.subheader("🔧 디버깅 도구")
+    
+    # 디버그 모드 토글
+    debug_mode = st.checkbox("🔍 디버그 모드 활성화", value=st.session_state.debug_mode, help="개발자용 고급 도구 표시")
+    st.session_state.debug_mode = debug_mode
+    
+    if debug_mode:
+        st.markdown("**🛠️ 개발자 도구**")
+        
+        # 벡터 스토어 상세 정보
+        with st.expander("📊 벡터 스토어 상세 정보"):
+            try:
+                db_info = vector_store.get_collection_info()
+                if db_info:
+                    st.json(db_info)
+                else:
+                    st.info("📊 벡터 스토어 정보를 가져올 수 없습니다.")
+            except Exception as e:
+                st.error(f"정보 조회 실패: {e}")
+        
+        # 성능 통계 상세
+        with st.expander("⚡ 성능 통계 상세"):
+            try:
+                perf_stats = rag_chain.get_performance_stats()
+                if perf_stats and any(perf_stats.values()):
+                    st.json(perf_stats)
+                else:
+                    st.info("📊 아직 질의가 수행되지 않아 통계 데이터가 없습니다.")
+            except Exception as e:
+                st.error(f"성능 통계 조회 실패: {e}")
+        
+        # 문서 처리 테스트
+        with st.expander("🧪 문서 처리 테스트"):
+            # ChromaDB에서 실제 문서 목록 가져오기
+            try:
+                collection = vector_store.vector_store._collection
+                all_results = collection.get()
+                available_docs = []
+                if all_results.get('metadatas'):
+                    sources = set()
+                    for metadata in all_results['metadatas']:
+                        source = metadata.get('source', '')
+                        if source and source not in sources:
+                            sources.add(source)
+                            available_docs.append(source)
+                
+                test_doc = st.selectbox(
+                    "테스트할 문서 선택:",
+                    options=available_docs if available_docs else ["문서 없음"],
+                    help="선택한 문서로 다양한 테스트 수행"
+                )
+            except Exception as e:
+                st.error(f"문서 목록 조회 실패: {e}")
+                test_doc = "문서 없음"
+            
+            if test_doc and test_doc != "문서 없음":
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("📝 요약 재생성", help="문서 요약을 다시 생성합니다"):
+                        if test_doc in st.session_state.document_summaries:
+                            del st.session_state.document_summaries[test_doc]
+                        new_summary = get_document_summary(test_doc)
+                        st.success("✅ 요약 재생성 완료")
+                        st.markdown("**📝 새로운 요약**")
+                        st.markdown(
+                            f"""
+                            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
+                                       border: 1px solid #dee2e6; margin: 0.5rem 0;">
+                            {new_summary}
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                
+                with col2:
+                    if st.button("🔍 청크 분석", help="문서의 청크 구조를 분석합니다"):
+                        try:
+                            collection = vector_store.vector_store._collection
+                            results = collection.get(where={"source": test_doc})
+                            
+                            st.write(f"**총 청크 수:** {len(results.get('documents', []))}")
+                            if results.get('documents'):
+                                chunk_lengths = [len(doc) for doc in results['documents']]
+                                st.write(f"**평균 청크 길이:** {sum(chunk_lengths)/len(chunk_lengths):.0f}자")
+                                st.write(f"**최소/최대 청크 길이:** {min(chunk_lengths)}/{max(chunk_lengths)}자")
+                        except Exception as e:
+                            st.error(f"청크 분석 실패: {e}")
+        
+        # PDF 테이블 처리 도구 (table_utils.py 연동)
+        with st.expander("📋 PDF 테이블 처리 도구"):
+            st.markdown("**table_utils.py를 활용한 PDF 텍스트 분석**")
+            
+            # ChromaDB에서 PDF 파일만 필터링
+            try:
+                collection = vector_store.vector_store._collection
+                all_results = collection.get()
+                pdf_docs = []
+                if all_results.get('metadatas'):
+                    sources = set()
+                    for metadata in all_results['metadatas']:
+                        source = metadata.get('source', '')
+                        if source and source not in sources and source.lower().endswith('.pdf'):
+                            sources.add(source)
+                            pdf_docs.append(source)
+            except Exception as e:
+                st.error(f"PDF 문서 목록 조회 실패: {e}")
+                pdf_docs = []
+            
+            if pdf_docs:
+                selected_pdf = st.selectbox("PDF 문서 선택:", pdf_docs, help="분석할 PDF 문서를 선택하세요")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if st.button("📄 원본 텍스트", help="PDF에서 추출한 원본 텍스트를 표시합니다"):
+                        raw_text = get_document_full_text(selected_pdf)
+                        st.session_state.debug_text_display = raw_text
+                        st.session_state.debug_text_type = "raw"
+                        st.session_state.debug_text_title = f"📄 {selected_pdf} - 원본 텍스트"
+                        st.success("✅ 원본 텍스트가 메인 화면에 표시됩니다")
+                        st.rerun()
+                
+                with col2:
+                    if st.button("🔍 구조화 미리보기", help="table_utils.py 로직으로 구조화된 텍스트를 미리봅니다"):
+                        try:
+                            # table_utils.py의 함수들을 활용한 텍스트 구조화
+                            import table_utils
+                            
+                            # 문서 텍스트 가져오기
+                            collection = vector_store.vector_store._collection
+                            results = collection.get(where={"source": selected_pdf})
+                            
+                            if results.get('documents'):
+                                full_text = "\n\n".join(results['documents'])
+                                
+                                # 간단한 구조화 예시 (실제 table_utils 로직에 맞게 수정 필요)
+                                lines = full_text.split('\n')
+                                structured_lines = []
+                                
+                                for line in lines:
+                                    if line.strip():
+                                        # 날짜 패턴 확인
+                                        if table_utils.DATE_RE.match(line.strip()):
+                                            structured_lines.append(f"📅 {line.strip()}")
+                                        # 불릿 포인트 확인
+                                        elif any(bullet in line for bullet in table_utils.ALL_BULLETS):
+                                            structured_lines.append(f"• {line.strip()}")
+                                        else:
+                                            structured_lines.append(line.strip())
+                                
+                                structured_text = "\n".join(structured_lines)
+                                st.session_state.debug_text_display = structured_text
+                                st.session_state.debug_text_type = "structured"
+                                st.session_state.debug_text_title = f"🔍 {selected_pdf} - 구조화된 텍스트"
+                                st.success("✅ 구조화된 텍스트가 메인 화면에 표시됩니다")
+                                st.rerun()
+                            else:
+                                st.warning("문서 텍스트를 찾을 수 없습니다.")
+                                
+                        except Exception as e:
+                            st.error(f"구조화 처리 실패: {e}")
+                
+                with col3:
+                    if st.button("📊 텍스트 통계", help="텍스트의 상세 통계를 보여줍니다"):
+                        try:
+                            collection = vector_store.vector_store._collection
+                            results = collection.get(where={"source": selected_pdf})
+                            
+                            if results.get('documents'):
+                                full_text = "\n\n".join(results['documents'])
+                                
+                                # 기본 통계
+                                char_count = len(full_text)
+                                word_count = len(full_text.split())
+                                line_count = len(full_text.split('\n'))
+                                
+                                # table_utils 관련 통계
+                                import table_utils
+                                date_matches = len(table_utils.DATE_RE.findall(full_text))
+                                bullet_count = sum(full_text.count(bullet) for bullet in table_utils.ALL_BULLETS)
+                                
+                                st.markdown(f"""
+                                **📊 텍스트 통계**
+                                - 총 문자 수: {char_count:,}자
+                                - 총 단어 수: {word_count:,}개
+                                - 총 줄 수: {line_count:,}줄
+                                - 날짜 패턴: {date_matches}개
+                                - 불릿 포인트: {bullet_count}개
+                                """)
+                            else:
+                                st.warning("문서 텍스트를 찾을 수 없습니다.")
+                                
+                        except Exception as e:
+                            st.error(f"통계 분석 실패: {e}")
+            else:
+                st.info("분석할 PDF 문서가 없습니다. PDF 파일을 업로드해주세요.")
+    
     # 데이터베이스 초기화
     st.divider()
     st.subheader("🗑️ 관리 기능")
@@ -791,6 +1117,7 @@ with st.sidebar:
                 rag_chain.clear_cache()
                 st.session_state.processed_files.clear()
                 st.session_state.processing_errors.clear()
+                st.session_state.document_summaries.clear()  # 요약 캐시도 초기화
                 st.success("✅ 모든 문서가 삭제되었습니다.")
                 st.rerun()
             except Exception as e:
@@ -802,13 +1129,84 @@ with st.sidebar:
                 rag_chain.clear_cache()
                 st.session_state.processed_files.clear()
                 st.session_state.processing_errors.clear()
+                st.session_state.document_summaries.clear()  # 문서 요약 캐시도 초기화
                 st.success("✅ 캐시가 초기화되었습니다.")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 캐시 초기화 실패: {e}")
 
+# 디버그 텍스트 표시 영역 (메인 화면)
+if st.session_state.debug_text_display:
+    st.markdown("---")
+    
+    # 헤더와 닫기 버튼
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f"### {st.session_state.debug_text_title}")
+    with col2:
+        if st.button("❌ 닫기", key="close_debug_text"):
+            st.session_state.debug_text_display = None
+            st.session_state.debug_text_type = None
+            st.session_state.debug_text_title = None
+            st.rerun()
+    
+    # 텍스트 타입에 따른 스타일링
+    if st.session_state.debug_text_type == "raw":
+        bg_color = "#f8f9fa"
+        border_color = "#dee2e6"
+    elif st.session_state.debug_text_type == "structured":
+        bg_color = "#f0f8ff"
+        border_color = "#007bff"
+    else:
+        bg_color = "#f8f9fa"
+        border_color = "#dee2e6"
+    
+    # 넓은 텍스트 박스로 표시
+    st.markdown(
+        f"""
+        <div style="background: {bg_color}; padding: 1.5rem; border-radius: 12px; 
+                   font-family: 'Courier New', monospace; font-size: 0.9rem; 
+                   max-height: 600px; overflow-y: auto; line-height: 1.6; 
+                   white-space: pre-wrap; word-wrap: break-word; 
+                   border: 2px solid {border_color}; margin: 1rem 0;
+                   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);">
+        {st.session_state.debug_text_display}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    st.markdown("---")
+
 # 메인 채팅 인터페이스
 st.header("💬 RAG 채팅")
+
+# 선택된 문서 요약 표시 (채팅 상단)
+if st.session_state.show_document_preview and st.session_state.selected_document:
+    doc_name = st.session_state.selected_document
+    
+# 헤더 부분 간소화
+    
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        with st.spinner(f"'{doc_name}' 요약 생성 중..."):
+            summary = get_document_summary(doc_name)
+            
+        # 마크다운이 적용되도록 직접 표시
+        st.markdown("---")
+        st.markdown(f"**📋 {doc_name} 요약**")
+        st.markdown(summary)
+        st.markdown("---")
+    
+    with col2:
+        # 답변 생성 중에는 닫기 버튼 비활성화
+        close_disabled = st.session_state.is_generating_response
+        close_help = "답변 생성 중에는 닫을 수 없습니다" if close_disabled else "요약 닫기"
+        
+        if st.button("❌", help=close_help, key="close_preview", disabled=close_disabled):
+            st.session_state.show_document_preview = False
+            st.session_state.selected_document = None
+            st.rerun()
 
 # 이전 대화 표시
 for message in st.session_state.messages:
@@ -824,6 +1222,9 @@ if prompt := st.chat_input("문서에 대해 질문해보세요..."):
     
     # AI 응답 생성
     with st.chat_message("assistant"):
+        # 답변 생성 시작을 표시
+        st.session_state.is_generating_response = True
+        
         with st.spinner("RAG 시스템으로 답변 생성 중..."):
             try:
                 start_time = time.time()
@@ -844,6 +1245,9 @@ if prompt := st.chat_input("문서에 대해 질문해보세요..."):
                 error_msg = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            finally:
+                # 답변 생성 완료를 표시
+                st.session_state.is_generating_response = False
 
 # 하단 정보
 st.markdown("---")

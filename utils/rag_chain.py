@@ -105,6 +105,20 @@ class SimpleRAGChain:
         self.qa_chain = self.qa_prompt | self.llm | StrOutputParser()
         self.summarize_chain = self.summarize_prompt | self.llm | StrOutputParser()
     
+    def _clean_response(self, response: str) -> str:
+        """응답에서 think 태그 제거"""
+        if not response:
+            return response
+        
+        # <think>...</think> 태그와 내용을 모두 제거
+        cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
+        
+        # 연속된 공백이나 줄바꿈 정리
+        cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
+        cleaned = re.sub(r'^\s+|\s+$', '', cleaned, flags=re.MULTILINE)
+        
+        return cleaned.strip()
+    
     def _check_db_status(self) -> int:
         """벡터 DB 상태 확인"""
         try:
@@ -527,6 +541,9 @@ class SimpleRAGChain:
                 "context": context
             })
             
+            # 7. think 태그 제거
+            response = self._clean_response(response)
+            
             # 7. 답변 검증 - "찾을 수 없다"는 답변이 아닌 경우에만 출처 추가
             if "찾을 수 없" not in response and "없습니다" not in response:
                 sources = self._extract_sources(filtered_docs, question)
@@ -574,7 +591,8 @@ class SimpleRAGChain:
             if len(document) > 3000:
                 document = document[:3000] + "..."
             
-            return self.summarize_chain.invoke({"document": document})
+            response = self.summarize_chain.invoke({"document": document})
+            return self._clean_response(response)
             
         except Exception as e:
             logger.error(f"문서 요약 오류: {e}")
