@@ -45,12 +45,14 @@ else:
 # Ollama configuration
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
+# 한국어 성능 개선을 위한 온도 조정 (더 일관된 답변)
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
 
-# Vector store configuration
+# Vector store configuration - 한국어 문서 특성에 최적화
 VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./data/vector_db")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+# 한국어 문서 특성에 맞게 청크 크기 조정
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 
 # Embedding models configuration
 EMBEDDING_MODELS_STR = os.getenv("EMBEDDING_MODELS", "llama2,all-minilm,nomic-embed-text")

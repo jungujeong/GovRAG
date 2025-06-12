@@ -216,6 +216,59 @@ class HwpLinuxExtractor:
             logger.error(f"대체 방법 실행 오류: {e}")
             return ""
     
+    # ────────────────────────────────────────────────────────────────
+    # NEW METHOD ➜ “셀마다 AAA 삽입” 예시
+    # ────────────────────────────────────────────────────────────────
+    def extract_tables_with_marker(self, hwp_file_path, marker="AAA"):
+        """
+        문서 안 모든 표를 순회하면서 **각 셀 앞뒤에 marker(기본 'AAA')를 붙여**
+        3-중첩 파이썬 리스트로 반환한다.
+        
+        Returns
+        -------
+        list[list[list[str]]]
+            tables[표][행][셀] -> 'AAA{cellText}AAA'
+        """
+        # 1) 필요한 Java 클래스 import
+        from kr.dogfoot.hwplib.reader import HWPReader
+        from kr.dogfoot.hwplib.object.bodytext.control import ControlType
+        from kr.dogfoot.hwplib.tool.textextractor import TextExtractor, TextExtractOption
+        JControlTable = jpype.JClass(
+            "kr.dogfoot.hwplib.object.bodytext.control.table.ControlTable"
+        )
+
+        # 2) 파일 로드 & 옵션
+        hwp = HWPReader.fromFile(str(Path(hwp_file_path).absolute()))
+        option = TextExtractOption()            # 기본 텍스트 추출 옵션
+        body = hwp.getBodyText()
+
+        tables_py = []
+
+        # 3) 섹션 → 문단 → 컨트롤 → 표 순회
+        for s_idx in range(body.getSectionCount()):
+            section = body.getSection(s_idx)
+            for para in section.getParagraphs():
+                for ctrl in (para.getControlList() or []):
+                    if ctrl.getType() != ControlType.Table:
+                        continue
+                    table = JControlTable.cast_(ctrl)
+
+                    # 4) 행 / 셀 순회 -- 셀마다 AAA 삽입
+                    rows_py = []
+                    for row in table.getRowList():
+                        cells_py = []
+                        for cell in row.getCellList():
+                            cell_text = " ".join(
+                                TextExtractor.extract(p, option)
+                                for p in cell.getParagraphList()
+                            ).strip()
+                            cells_py.append(f"{marker}{cell_text}{marker}")
+                        rows_py.append(cells_py)
+                    tables_py.append(rows_py)
+
+        return tables_py
+
+
     def shutdown(self):
         """JVM 종료"""
         if jpype.isJVMStarted():
