@@ -95,6 +95,29 @@ def initialize_components():
 # 전역 컴포넌트
 document_processor, vector_store, rag_chain = initialize_components()
 
+# 앱 시작시 BM25 동기화 상태 확인 및 자동 재구성
+def check_and_fix_bm25_sync():
+    """앱 시작 시 BM25 동기화 상태 확인 및 자동 재구성"""
+    try:
+        db_info = vector_store.get_collection_info()
+        chroma_docs = db_info.get('document_count', 0)
+        bm25_docs = db_info.get('bm25_documents', 0)
+        
+        if chroma_docs > 0 and bm25_docs == 0:
+            logger.warning(f"BM25 인덱스 동기화 필요: ChromaDB({chroma_docs}) vs BM25({bm25_docs})")
+            vector_store._rebuild_indexes_from_chromadb()
+            logger.info("앱 시작 시 BM25 인덱스 자동 재구성 완료")
+            return True
+    except Exception as e:
+        logger.error(f"BM25 동기화 확인 실패: {e}")
+    return False
+
+# BM25 동기화 확인은 한 번만 실행
+if 'bm25_sync_checked' not in st.session_state:
+    st.session_state.bm25_sync_checked = True
+    if check_and_fix_bm25_sync():
+        logger.info("BM25 인덱스가 자동으로 재구성되었습니다.")
+
 # CSS 스타일링 - 깔끔하고 직관적으로 개선
 st.markdown(
     """
@@ -328,6 +351,7 @@ def add_document_to_vectorstore_enhanced(file_path, file_name):
         logger.info(f"문서 처리 시작: {file_name}")
         
         # 1. 기존 문서 확인 및 삭제 (중복 처리)
+        deleted_existing = False
         try:
             existing_docs = vector_store.get_document_by_metadata({"source": file_name})
             if existing_docs:
@@ -337,6 +361,7 @@ def add_document_to_vectorstore_enhanced(file_path, file_name):
                 delete_results = collection.get(where={"source": file_name})
                 if delete_results.get('ids'):
                     collection.delete(ids=delete_results['ids'])
+                    deleted_existing = True
                     logger.info(f"기존 문서 삭제 완료: {len(delete_results['ids'])}개 청크")
         except Exception as e:
             logger.warning(f"기존 문서 삭제 중 오류 (계속 진행): {e}")
@@ -357,6 +382,14 @@ def add_document_to_vectorstore_enhanced(file_path, file_name):
         
         # 4. 벡터 스토어에 추가
         doc_ids = vector_store.add_documents(chunks)
+        
+        # 5. 중복 문서를 삭제했다면 BM25 인덱스 전체 재구성
+        if deleted_existing:
+            try:
+                vector_store._rebuild_indexes_from_chromadb()
+                logger.info("기존 문서 삭제로 인한 BM25 인덱스 재구성 완료")
+            except Exception as e:
+                logger.warning(f"BM25 인덱스 재구성 실패 (검색 성능에 영향 가능): {e}")
         
         logger.info(f"문서 추가 성공: {file_name}, 청크 수: {len(chunks)}")
         return True, f"성공적으로 처리됨 ({len(chunks)}개 청크)"
@@ -444,17 +477,38 @@ with st.sidebar:
     # 벡터 DB 정보 표시
     try:
         db_info = vector_store.get_collection_info()
+        chroma_docs = db_info.get('document_count', 0)
+        bm25_docs = db_info.get('bm25_documents', 0)
+        
+        # BM25 문서 수가 ChromaDB 문서 수와 다르면 경고 표시
+        sync_status = "✅ 동기화됨" if chroma_docs == bm25_docs else "⚠️ 동기화 필요"
+        sync_color = "#28a745" if chroma_docs == bm25_docs else "#ffc107"
+        
         st.markdown(
             f"""
             <div class="stats-container">
                 <h4>📊 데이터베이스 상태</h4>
-                <p><strong>문서 수:</strong> {db_info.get('document_count', 0)}</p>
-                <p><strong>BM25 문서:</strong> {db_info.get('bm25_documents', 0)}</p>
+                <p><strong>문서 수:</strong> {chroma_docs}</p>
+                <p><strong>BM25 문서:</strong> {bm25_docs}</p>
                 <p><strong>컬렉션:</strong> {db_info.get('collection_name', 'N/A')}</p>
+                <p style="color: {sync_color}; font-weight: bold;"><strong>상태:</strong> {sync_status}</p>
             </div>
             """,
             unsafe_allow_html=True
         )
+        
+        # BM25 인덱스 재구성 버튼 (동기화가 안된 경우)
+        if chroma_docs != bm25_docs and chroma_docs > 0:
+            if st.button("🔄 BM25 인덱스 재구성", help="서버 재시작 후 검색이 안될 때 사용"):
+                with st.spinner("BM25 인덱스 재구성 중..."):
+                    try:
+                        vector_store._rebuild_indexes_from_chromadb()
+                        st.success(f"BM25 인덱스 재구성 완료! ({chroma_docs}개 문서)")
+                        st.rerun()  # 페이지 새로고침
+                    except Exception as e:
+                        st.error(f"BM25 인덱스 재구성 실패: {e}")
+                        logger.error(f"Manual BM25 rebuild failed: {e}")
+        
     except Exception as e:
         st.warning(f"DB 상태 조회 실패: {e}")
     
