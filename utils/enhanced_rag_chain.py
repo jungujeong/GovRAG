@@ -167,6 +167,20 @@ class EnhancedRAGChain:
         self.answer_verification_chain = self.answer_verification_prompt | self.llm | StrOutputParser()
         self.summarization_chain = self.summarization_prompt | self.llm | StrOutputParser()
     
+    def _clean_response(self, response: str) -> str:
+        """응답에서 think 태그 제거"""
+        if not response:
+            return response
+        
+        # <think>...</think> 태그와 내용을 모두 제거
+        cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
+        
+        # 연속된 공백이나 줄바꿈 정리
+        cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
+        cleaned = re.sub(r'^\s+|\s+$', '', cleaned, flags=re.MULTILINE)
+        
+        return cleaned.strip()
+    
     def _analyze_query(self, question: str) -> Dict[str, Any]:
         """질문 분석"""
         try:
@@ -414,6 +428,9 @@ class EnhancedRAGChain:
             # 5단계: 답변 생성
             answer = self._generate_answer(question, context)
             
+            # 5.5단계: think 태그 제거
+            answer = self._clean_response(answer)
+            
             # 6단계: 답변 검증
             verified_answer, is_verified = self._verify_answer(question, context, answer)
             
@@ -468,6 +485,7 @@ class EnhancedRAGChain:
                 return document  # 너무 짧은 문서는 그대로 반환
             
             summary = self.summarization_chain.invoke({"document": document})
+            summary = self._clean_response(summary)
             return summary.strip()
             
         except Exception as e:
