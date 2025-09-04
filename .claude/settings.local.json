@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(chmod:*)",
+      "Bash(make:*)",
+      "Read(/Users/yummongi/Desktop/**)",
+      "Bash(PYTHONPATH=. python processors/indexer.py)",
+      "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(./run_directive_extractor.sh:*)",
+      "Bash(data/extracted_directives/.gitkeep data/extracted_directives_v2/.gitkeep)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

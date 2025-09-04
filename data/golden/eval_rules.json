@@ -1,0 +1,13 @@
+{
+  "thresholds": {
+    "exact_match": 0.95,
+    "f1_score": 0.99,
+    "citation_accuracy": 0.995,
+    "hallucination_rate": 0.0
+  },
+  "normalization": {
+    "remove_spaces": true,
+    "lowercase": false,
+    "normalize_numbers": true
+  }
+}
