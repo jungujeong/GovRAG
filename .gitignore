@@ -67,3 +67,5 @@ frontend/build/
 *.bak
 temp/
 tmp/
+# Large model files
+models/
