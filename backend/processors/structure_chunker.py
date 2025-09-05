@@ -94,16 +94,22 @@ class StructureChunker:
         chunks = []
         chunk_id = 0
         
-        for page in doc.get("pages", []):
-            # Create chunks from page blocks
-            page_chunks = self._create_chunks_from_blocks(
-                page["blocks"],
-                doc["doc_id"],
-                page["page_num"],
-                chunk_id
-            )
-            chunks.extend(page_chunks)
-            chunk_id += len(page_chunks)
+        # Check if document has directive processing results
+        if any(page.get("directive_records") for page in doc.get("pages", [])):
+            # Use directive-based chunking
+            chunks.extend(self._chunk_directive_document(doc, chunk_id))
+        else:
+            # Traditional block-based chunking
+            for page in doc.get("pages", []):
+                # Create chunks from page blocks
+                page_chunks = self._create_chunks_from_blocks(
+                    page["blocks"],
+                    doc["doc_id"],
+                    page["page_num"],
+                    chunk_id
+                )
+                chunks.extend(page_chunks)
+                chunk_id += len(page_chunks)
         
         # Process tables
         if self.table_as_separate:
@@ -255,6 +261,81 @@ class StructureChunker:
             chunks.append(chunk)
         
         return chunks
+    
+    def _chunk_directive_document(self, doc: Dict, start_chunk_id: int) -> List[Dict]:
+        """Chunk document using directive processing results"""
+        chunks = []
+        chunk_id = start_chunk_id
+        
+        # Get directive records from the first page that has them
+        directive_records = None
+        for page in doc.get("pages", []):
+            if page.get("directive_records"):
+                directive_records = page["directive_records"]
+                break
+        
+        if not directive_records:
+            return []
+        
+        # Create one chunk per directive record
+        for i, record in enumerate(directive_records):
+            # Create chunk from directive record
+            directive_text = self._format_directive_for_chunk(record)
+            
+            chunk = {
+                "chunk_id": f"{doc['doc_id']}-directive-{chunk_id}",
+                "doc_id": doc["doc_id"],
+                "section_or_page": record.get("page", 1),
+                "page": record.get("page", 1),
+                "text": directive_text,
+                "start_char": 0,
+                "end_char": len(directive_text),
+                "type": "directive",
+                "directive_category": record.get("category", "지시"),
+                "directive_title": record.get("title", ""),
+                "directive_departments": record.get("departments", []),
+                "directive_deadline": record.get("deadline", ""),
+                "directive_index": record.get("index", i + 1),
+                "tokens": self._count_tokens(directive_text)
+            }
+            
+            chunks.append(chunk)
+            chunk_id += 1
+        
+        return chunks
+    
+    def _format_directive_for_chunk(self, record: Dict) -> str:
+        """Format directive record as searchable text"""
+        parts = []
+        
+        # Add title
+        if record.get("title"):
+            parts.append(f"제목: {record['title']}")
+        
+        # Add category
+        if record.get("category"):
+            parts.append(f"분류: {record['category']}")
+        
+        # Add main directive text
+        if record.get("directive"):
+            parts.append(f"내용: {record['directive']}")
+        
+        # Add body if different from directive
+        if record.get("body") and record["body"] != record.get("directive", ""):
+            parts.append(f"상세: {record['body']}")
+        
+        # Add departments
+        if record.get("departments"):
+            parts.append(f"담당부서: {', '.join(record['departments'])}")
+        
+        # Add deadline
+        if record.get("deadline"):
+            parts.append(f"처리기한: {record['deadline']}")
+        
+        # Add source info
+        parts.append(f"출처: {record.get('source_file', '')} (페이지 {record.get('page', 1)})")
+        
+        return "\n".join(parts)
     
     def _create_chunk(self, text: str, doc_id: str, section_or_page: int,
                      chunk_id: int, page: int, start_char: int, end_char: int) -> Dict:

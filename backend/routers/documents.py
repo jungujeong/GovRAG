@@ -376,4 +376,49 @@ async def get_document_detail(filename: str) -> Dict:
         "avg_chunk_size": round(sum(len(c["text"]) for c in doc_info["chunks"]) / max(len(doc_info["chunks"]), 1), 2)
     }
     
+    # Load directive processing results if available
+    try:
+        directive_jsonl = file_path.with_suffix("") / f"{file_path.stem}_directive.jsonl"
+        processed_txt = file_path.with_suffix("") / f"{file_path.stem}_processed.txt"
+        
+        # Try both locations - same directory as PDF and data/documents
+        possible_paths = [
+            file_path.parent / f"{file_path.stem}_directive.jsonl",
+            file_path.parent / f"{file_path.stem}_processed.txt"
+        ]
+        
+        directive_records = []
+        processed_text = ""
+        
+        # Load directive JSONL
+        for jsonl_path in [file_path.parent / f"{file_path.stem}_directive.jsonl"]:
+            if jsonl_path.exists():
+                import json
+                with open(jsonl_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            directive_records.append(json.loads(line))
+                logger.info(f"Loaded {len(directive_records)} directive records from {jsonl_path}")
+                break
+        
+        # Load processed text
+        for txt_path in [file_path.parent / f"{file_path.stem}_processed.txt"]:
+            if txt_path.exists():
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    processed_text = f.read()
+                logger.info(f"Loaded processed text from {txt_path}")
+                break
+        
+        if directive_records or processed_text:
+            doc_info["directive_processing"] = {
+                "directive_records": directive_records,
+                "processed_text": processed_text,
+                "total_directives": len(directive_records),
+                "categories": list(set(r.get("category", "지시") for r in directive_records)),
+                "departments": list(set(dept for r in directive_records for dept in r.get("departments", [])))
+            }
+            
+    except Exception as e:
+        logger.warning(f"Could not load directive processing results: {e}")
+    
     return doc_info

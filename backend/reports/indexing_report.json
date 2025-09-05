@@ -1,9 +1,9 @@
 [
   {
     "status": "success",
-    "file": "data/documents/구청장 지시사항(제116호).pdf",
-    "chunks": 6,
+    "file": "data/documents/구청장 지시사항(제099호).pdf",
+    "chunks": 8,
     "pages": 3,
-    "tables": 3
+    "tables": 0
   }
 ]
