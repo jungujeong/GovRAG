@@ -118,7 +118,7 @@ class CitationTracker:
                     "start_char": evidence.get("start_char", 0),
                     "end_char": evidence.get("end_char", 0),
                     "chunk_id": evidence.get("chunk_id", ""),
-                    "text_snippet": evidence.get("text", "")[:100] + "..."
+                    "text_snippet": evidence.get("text", "")
                 })
         else:
             # Enhance existing sources with evidence data
@@ -141,7 +141,7 @@ class CitationTracker:
                         "start_char": matching_evidence.get("start_char", 0),
                         "end_char": matching_evidence.get("end_char", 0),
                         "chunk_id": matching_evidence.get("chunk_id", ""),
-                        "text_snippet": matching_evidence.get("text", "")[:100] + "..."
+                        "text_snippet": matching_evidence.get("text", "")
                     })
                 else:
                     formatted.append(source)
