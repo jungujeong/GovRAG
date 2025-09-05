@@ -480,20 +480,74 @@ def find_departments_from_tokens(tokens: List[str], known_depts: Set[str]) -> Li
 # ----------------------- 텍스트 처리 -----------------------
 
 def minimal_text_cleanup(text: str) -> str:
-    """최소한의 텍스트 정제 (의미 변경 방지)"""
-    # 기본 단위 결합
-    text = re.sub(r'(\d+)\s*월', r'\1월', text)
-    text = re.sub(r'(\d+)\s*일', r'\1일', text)
-    text = re.sub(r'(\d+)\s*%', r'\1%', text)
-    text = re.sub(r'제\s*(\d+)\s*회', r'제\1회', text)
+    """최소한의 텍스트 정제 (의미 변경 방지) - 일반적 패턴만 사용"""
     
-    # 부서 띄어쓰기 정규화
+    # 1. 기본 단위 결합 (숫자와 단위 사이 공백 제거)
+    text = re.sub(r'(\d+)\s*([월일년%회차개건명])', r'\1\2', text)
+    
+    # 2. 회차 표현 정규화 (일반적 패턴)
+    # "제회2" → "제 2회", "제 회 3" → "제 3회"
+    text = re.sub(r'제\s*회?\s*(\d+)', r'제 \1회', text)
+    text = re.sub(r'제\s*(\d+)\s*회', r'제 \1회', text)
+    
+    # 3. 중복 문자 제거 (일반적 패턴)
+    # "제 2회회" → "제 2회"
+    text = re.sub(r'(제\s*\d+회)회+', r'\1', text)
+    
+    # 4. 년도와 회차/제목 사이 공백 추가
+    text = re.sub(r'(\d{4})년([제가-힣])', r'\1년 \2', text)
+    
+    # 5. 빈 괄호/대괄호 제거
+    text = re.sub(r'\(\s*\)', '', text)
+    text = re.sub(r'\[\s*\]', '', text)
+    
+    # 6. 일반적 띄어쓰기 패턴 개선
+    # 형용사+명사: "가능한사업" → "가능한 사업"
+    text = re.sub(r'([가-힣]+한)([가-힣]{2,})', r'\1 \2', text)
+    # 명사+시점표현: "편성시" → "편성 시"
+    text = re.sub(r'([가-힣]{2,})시([가-힣])', r'\1 시 \2', text)
+    # 부사+동사: "조속히하게" → "조속히 하게"
+    text = re.sub(r'([가-힣]+히)([가-힣]+게)', r'\1 \2', text)
+    
+    # 7. 반복되는 복합어 패턴 정리
+    # "ABCABC" 형태에서 괄호로 분리: "예산결산예산" → "예산(결산예산)" (일반적 패턴)
+    # 3글자 이상의 반복 패턴을 찾아서 괄호로 분리
+    def fix_compound_repetition(match):
+        full_text = match.group(0)
+        # 중간 지점을 찾아서 분리 시도
+        for i in range(2, len(full_text) - 1):
+            prefix = full_text[:i]
+            suffix = full_text[i:]
+            # 접두어가 접미어에 포함되면 괄호로 분리
+            if prefix in suffix and len(prefix) >= 2:
+                return f"{prefix}({suffix})"
+        return full_text
+    
+    # 복합어 반복 패턴 감지 (6글자 이상)
+    text = re.sub(r'[가-힣]{6,}', fix_compound_repetition, text)
+    
+    # 8. 부서 띄어쓰기 정규화
     text = normalize_spacing_for_departments(text)
     
-    # 중복 구두점 축소
+    # 9. 중복 공백/구두점 정리
+    text = re.sub(r'\s{2,}', ' ', text)
     text = re.sub(r',,+', ',', text)
     text = re.sub(r'\.\.+', '.', text)
-    text = re.sub(r'\s{2,}', ' ', text)
+    
+    # 10. 중복 문장 제거
+    sentences = text.split('.')
+    unique_sentences = []
+    seen = set()
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if sentence and sentence not in seen and len(sentence) > 3:
+            unique_sentences.append(sentence)
+            seen.add(sentence)
+    
+    if unique_sentences:
+        text = '. '.join(unique_sentences)
+        if not text.endswith('.') and len(text) > 10:
+            text += '.'
     
     return text.strip()
 

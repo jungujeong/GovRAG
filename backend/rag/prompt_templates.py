@@ -3,21 +3,25 @@ from typing import List, Dict
 class PromptTemplates:
     """Evidence-Only generation prompt templates"""
     
-    # 작은 모델용 단순화된 시스템 프롬프트
+    # 단순화된 시스템 프롬프트
     SYSTEM_PROMPT = """한국어로 답변하는 문서 검색 도우미입니다.
-제공된 문서 내용만 사용하여 답변합니다."""
+제공된 문서 내용을 바탕으로 답변합니다.
+부서명이 있다면 포함하여 답변하세요.
+문서명이나 파일명은 언급하지 마세요."""
     
-    # 더욱 단순화된 프롬프트 (작은 모델용)
-    USER_PROMPT_TEMPLATE = """다음 문서를 읽고 질문에 답하세요.
+    # 단순화된 프롬프트
+    USER_PROMPT_TEMPLATE = """다음 문서 내용을 참고하여 질문에 답변하세요.
 
-문서:
+문서 내용:
 {evidences}
 
 질문: {query}
 
+답변 시 부서명이 있다면 포함하되, 문서명이나 파일명은 언급하지 마세요.
+
 답변:"""
     
-    # 단순화된 증거 형식 
+    # 증거 형식에서 파일명 제거, 내용과 부서명만 포함
     EVIDENCE_FORMAT = """{text}"""
     
     OUTPUT_SCHEMA = {
@@ -64,17 +68,14 @@ class PromptTemplates:
         formatted_evidences = []
         
         for idx, evidence in enumerate(evidences, 1):
-            formatted_evidence = cls.EVIDENCE_FORMAT.format(
-                idx=idx,
-                doc_id=evidence.get("doc_id", "unknown"),
-                page=evidence.get("page", 0),
-                text=evidence.get("text", "")
-            )
+            text = evidence.get("text", "")
+            # Always use the same format - no filename, only content
+            formatted_evidence = cls.EVIDENCE_FORMAT.format(text=text)
             formatted_evidences.append(formatted_evidence)
         
         return cls.USER_PROMPT_TEMPLATE.format(
             query=query,
-            evidences="\n".join(formatted_evidences)
+            evidences="\n\n".join(formatted_evidences)
         )
     
     @classmethod
@@ -86,7 +87,7 @@ class PromptTemplates:
         )
     
     @classmethod
-    def get_system_prompt(cls) -> str:
+    def get_system_prompt(cls, evidences: List[Dict] = None) -> str:
         """Get system prompt"""
         return cls.SYSTEM_PROMPT
     

@@ -27,7 +27,7 @@ class OllamaGenerator:
         """Generate response using Ollama"""
         
         # Format prompt
-        system_prompt = PromptTemplates.get_system_prompt()
+        system_prompt = PromptTemplates.get_system_prompt(evidences)
         user_prompt = PromptTemplates.format_user_prompt(query, evidences)
         
         # Prepare request

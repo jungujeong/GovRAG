@@ -27,11 +27,11 @@ class PDFHybridProcessor:
         if '구청장' in file_name and '지시' in file_name:
             logger.info(f"Detected directive document: {file_name}")
             
-            # Use the strict v2 directive extractor (완전 재구현 버전)
-            from processors.directive_extractor_strict_v2 import process_pdf
+            # Use the whitelist final directive extractor (최신 화이트리스트 버전)
+            from processors.directive_extractor_whitelist_final import process_pdf_with_whitelist
             
             # Process PDF to get structured directives
-            records, _ = process_pdf(file_path)
+            records, _ = process_pdf_with_whitelist(file_path)
             
             # Convert to document format for RAG system
             pages = {}

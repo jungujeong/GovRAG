@@ -191,8 +191,8 @@ class DocumentIndexer:
             
             # First, delete any existing chunks for this document to avoid duplicates
             doc_id = doc.get("doc_id", Path(file_path).stem)
-            import unicodedata
-            doc_id_normalized = unicodedata.normalize("NFC", doc_id)
+            # Keep original doc_id without Unicode normalization to preserve Korean filename
+            doc_id_normalized = doc_id
             
             # Delete existing chunks from both indexes
             logger.info(f"Deleting existing chunks for {doc_id_normalized}")
