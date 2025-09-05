@@ -138,8 +138,24 @@ data/documents/
 data/extracted_directives/
 data/extracted_directives_v2/
 data/test_documents/
+data/vector_db/
+backup/vector_db/
 logs/
 reports/
+
+# Chroma specific files
+**/data_level*.bin
+**/header.bin
+**/length.bin
+**/link_lists.bin
+chroma.sqlite3
+*.sqlite3
+*.db
+
+# Vector database files
+vector_db/
+*.vec
+*.idx
 
 # Temporary files
 *.jsonl
