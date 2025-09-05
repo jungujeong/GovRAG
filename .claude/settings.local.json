@@ -30,7 +30,11 @@
       "Bash(./processors/__pycache__/directive_extractor_v2.cpython-312.pyc)",
       "Bash(timeout 10 curl -X POST \"http://localhost:8000/api/query\" )",
       "Bash(git stash:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(git reset:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(ssh:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
