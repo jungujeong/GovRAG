@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(chmod:*)",
+      "Bash(make:*)",
+      "Read(/Users/yummongi/Desktop/**)",
+      "Bash(PYTHONPATH=. python processors/indexer.py)",
+      "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(./run_directive_extractor.sh:*)",
+      "Bash(data/extracted_directives/.gitkeep data/extracted_directives_v2/.gitkeep)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(PYTHONPATH=. python backend/processors/indexer.py)",
+      "Bash(PYTHONPATH=. python:*)",
+      "Bash(uvicorn:*)",
+      "Bash(./processors/directive_extractor.py )",
+      "Bash(./processors/directive_extractor_universal.py )",
+      "Bash(./processors/directive_extractor_strict.py )",
+      "Bash(./processors/directive_extractor_final.py:*)",
+      "Bash(./processors/__pycache__/directive_extractor_strict.cpython-312.pyc )",
+      "Bash(./processors/__pycache__/directive_extractor_v2.cpython-312.pyc)",
+      "Bash(timeout 10 curl -X POST \"http://localhost:8000/api/query\" )",
+      "Bash(git stash:*)",
+      "Bash(git rm:*)",
+      "Bash(git reset:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(ssh:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -5,52 +5,79 @@ __pycache__/
 *.so
 .Python
 env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# 가상환경
 venv/
-env/
 ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
 
-# IDE 파일
-.idea/
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (keep .env for team sharing)
+.env.local
+.env.*.local
+.env.production
+
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
+*~
 .DS_Store
 
-# 로그 파일
+# Data and indexes
+data/documents/*
+data/index/*
+data/chroma/*
+data/extracted_directives/*
+data/extracted_directives_v2/*
+reports/*.html
+reports/*.json
+
+# Keep directory structure
+!data/documents/.gitkeep
+!data/index/.gitkeep
+!data/chroma/.gitkeep
+!data/extracted_directives/.gitkeep
+!data/extracted_directives_v2/.gitkeep
+!data/golden/
+
+# Test and temporary files
+test_*.py
+*_test.py
+*.jsonl
+check_*.py
+*_strict_v*.py
+*_extracted.jsonl
+*_final.jsonl
+
+# Backend runtime files
+backend/uvicorn.log
+
+# Logs
 *.log
+logs/
 
-# 데이터 폴더 (폴더는 유지하고 내용만 무시)
-data/*
-!data/.gitkeep
+# Test coverage
+coverage/
+.coverage
+htmlcov/
 
-# 임시 파일
+# Build outputs
+frontend/dist/
+frontend/build/
+
+# Temp files
+*.tmp
+*.bak
 temp/
 tmp/
-.temp/
-.tmp/
-
-# 모델 파일
-*.pt
-*.pth
-*.h5
-*.model
-*.bin
-*.joblib
-*.pickle
-*.pkl
+# Large model files
+models/
