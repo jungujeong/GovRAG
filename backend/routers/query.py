@@ -16,13 +16,76 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Initialize components
-retriever = HybridRetriever()
-reranker = Reranker()
-generator = OllamaGenerator()
-enforcer = EvidenceEnforcer()
-citation_tracker = CitationTracker()
-formatter = AnswerFormatter()
+# Lazy initialization of components
+_retriever = None
+_reranker = None
+_generator = None
+_enforcer = None
+_citation_tracker = None
+_formatter = None
+
+def get_retriever():
+    global _retriever
+    if _retriever is None:
+        _retriever = HybridRetriever()
+    return _retriever
+
+def get_reranker():
+    global _reranker
+    if _reranker is None:
+        _reranker = Reranker()
+    return _reranker
+
+def get_generator():
+    global _generator
+    if _generator is None:
+        _generator = OllamaGenerator()
+    return _generator
+
+def get_enforcer():
+    global _enforcer
+    if _enforcer is None:
+        _enforcer = EvidenceEnforcer()
+    return _enforcer
+
+def get_citation_tracker():
+    global _citation_tracker
+    if _citation_tracker is None:
+        _citation_tracker = CitationTracker()
+    return _citation_tracker
+
+def get_formatter():
+    global _formatter
+    if _formatter is None:
+        _formatter = AnswerFormatter()
+    return _formatter
+
+@router.get("/test")
+async def test_retrieval(q: str = "테스트"):
+    """Simple test endpoint for retrieval"""
+    try:
+        from rag.whoosh_bm25 import WhooshBM25
+        from rag.chroma_store import ChromaStore
+        
+        # Test Whoosh search
+        whoosh = WhooshBM25()
+        whoosh_results = whoosh.search(q, limit=5)
+        
+        # Test Chroma search  
+        chroma = ChromaStore()
+        # For now, skip embedding to avoid blocking
+        
+        return {
+            "query": q,
+            "whoosh_results": len(whoosh_results),
+            "whoosh_sample": whoosh_results[0] if whoosh_results else None
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
 @router.post("/", response_model=QueryResponse)
 async def process_query(request: QueryRequest) -> QueryResponse:
@@ -31,6 +94,7 @@ async def process_query(request: QueryRequest) -> QueryResponse:
         logger.info(f"Processing query: {request.query[:100]}...")
         
         # 1. Retrieve relevant documents
+        retriever = get_retriever()
         evidences = retriever.retrieve(
             request.query,
             limit=config.TOPK_BM25 + config.TOPK_VECTOR
@@ -47,6 +111,7 @@ async def process_query(request: QueryRequest) -> QueryResponse:
             )
         
         # 2. Rerank if available
+        reranker = get_reranker()
         if reranker.model or (reranker.use_onnx and hasattr(reranker, 'ort_session')):
             evidences = reranker.rerank(
                 request.query,
@@ -58,6 +123,7 @@ async def process_query(request: QueryRequest) -> QueryResponse:
             evidences = evidences[:config.TOPK_RERANK]
         
         # 3. Generate response
+        generator = get_generator()
         response = await generator.generate(
             request.query,
             evidences,
@@ -65,12 +131,15 @@ async def process_query(request: QueryRequest) -> QueryResponse:
         )
         
         # 4. Verify and enforce evidence
+        enforcer = get_enforcer()
         response = enforcer.enforce_evidence(response, evidences)
         
         # 5. Track citations
+        citation_tracker = get_citation_tracker()
         response = citation_tracker.track_citations(response, evidences)
         
         # 6. Format response
+        formatter = get_formatter()
         response = formatter.format_response(response)
         
         # 7. Create final response

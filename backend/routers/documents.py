@@ -16,10 +16,9 @@ indexer = DocumentIndexer()
 
 @router.post("/upload")
 async def upload_document(
-    file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+    file: UploadFile = File(...)
 ) -> Dict:
-    """Upload and index a document"""
+    """Upload and index a document (synchronously for immediate feedback)"""
     
     # Validate file type
     if not file.filename.lower().endswith(('.pdf', '.hwp')):
@@ -38,16 +37,20 @@ async def upload_document(
         
         logger.info(f"Saved file: {file_path}")
         
-        # Index in background - make sure path is absolute
+        # Index synchronously for immediate result
         absolute_path = file_path.resolve()
-        logger.info(f"Indexing document: {absolute_path}")
-        background_tasks.add_task(indexer.index_document, absolute_path)
+        logger.info(f"Indexing document synchronously: {absolute_path}")
+        
+        # Index immediately and get result
+        result = indexer.index_document_sync(absolute_path)
         
         return {
-            "status": "uploaded",
+            "status": "indexed",
             "filename": file.filename,
             "path": str(file_path),
-            "message": "Document uploaded and queued for indexing"
+            "chunks": result.get("chunks", 0),
+            "pages": result.get("pages", 0),
+            "message": f"Document uploaded and indexed successfully ({result.get('chunks', 0)} chunks)"
         }
         
     except Exception as e:
@@ -88,7 +91,7 @@ async def upload_batch(
             # Queue for indexing - use absolute path
             absolute_path = file_path.resolve()
             logger.info(f"Queuing for indexing: {absolute_path}")
-            background_tasks.add_task(indexer.index_document, absolute_path)
+            background_tasks.add_task(indexer.index_document_sync, absolute_path)
             
         except Exception as e:
             logger.error(f"Failed to upload {file.filename}: {e}")
@@ -242,7 +245,17 @@ async def reindex_all(background_tasks: BackgroundTasks) -> Dict:
     chroma.clear_collection()
     
     # Queue reindexing
-    background_tasks.add_task(indexer.index_directory, doc_dir)
+    # Create a synchronous wrapper for index_directory
+    def index_directory_sync():
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(indexer.index_directory(doc_dir))
+    
+    background_tasks.add_task(index_directory_sync)
     
     return {
         "status": "reindexing",

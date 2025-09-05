@@ -173,25 +173,30 @@ class WhooshBM25:
     def delete_document(self, doc_id: str) -> int:
         """Delete all chunks for a document"""
         count = 0
-        writer = self.index.writer()
         try:
-            # Search for all chunks with this doc_id
+            # First count how many will be deleted
             with self.index.searcher() as searcher:
                 from whoosh.query import Term
                 query = Term("doc_id", doc_id)
                 results = searcher.search(query, limit=None)
                 count = len(results)
-                
-                # Delete each chunk
-                for hit in results:
-                    writer.delete_by_term("chunk_id", hit["chunk_id"])
             
-            writer.commit()
-            logger.info(f"Deleted {count} chunks for document: {doc_id}")
+            if count > 0:
+                # Now delete using a writer
+                writer = self.index.writer()
+                try:
+                    # Delete all documents with this doc_id
+                    writer.delete_by_term("doc_id", doc_id)
+                    writer.commit()
+                    logger.info(f"Deleted {count} chunks for document: {doc_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete document {doc_id}: {e}")
+                    writer.cancel()
+                    return 0
+            
             return count
         except Exception as e:
             logger.error(f"Failed to delete document {doc_id}: {e}")
-            writer.cancel()
             return 0
     
     def update_chunk(self, chunk: Dict):
@@ -222,13 +227,18 @@ class WhooshBM25:
     
     def clear_index(self):
         """Clear all documents from index"""
-        writer = self.index.writer()
         try:
-            writer.commit(mergetype=writer.CLEAR)
-            logger.info("Cleared Whoosh index")
+            # Delete the index directory and recreate
+            import shutil
+            if Path(self.index_dir).exists():
+                shutil.rmtree(self.index_dir)
+                Path(self.index_dir).mkdir(parents=True, exist_ok=True)
+            
+            # Recreate the index
+            self._create_index()
+            logger.info("Cleared and recreated Whoosh index")
         except Exception as e:
             logger.error(f"Failed to clear index: {e}")
-            writer.cancel()
     
     def get_stats(self) -> Dict:
         """Get index statistics"""

@@ -19,10 +19,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Environment files
-.env
+# Environment files (keep .env for team sharing)
 .env.local
 .env.*.local
+.env.production
 
 # IDE
 .vscode/
@@ -48,6 +48,18 @@ reports/*.json
 !data/extracted_directives/.gitkeep
 !data/extracted_directives_v2/.gitkeep
 !data/golden/
+
+# Test and temporary files
+test_*.py
+*_test.py
+*.jsonl
+check_*.py
+*_strict_v*.py
+*_extracted.jsonl
+*_final.jsonl
+
+# Backend runtime files
+backend/uvicorn.log
 
 # Logs
 *.log

@@ -232,13 +232,14 @@ class ChromaStore:
     def clear_collection(self):
         """Clear all documents from collection"""
         try:
-            # Delete and recreate collection
-            self.client.delete_collection("documents")
-            self.collection = self.client.create_collection(
-                name="documents",
-                metadata={"hnsw:space": "cosine"}
-            )
-            logger.info("Cleared ChromaDB collection")
+            # Get all document IDs
+            results = self.collection.get()
+            if results and results['ids']:
+                # Delete all documents
+                self.collection.delete(ids=results['ids'])
+                logger.info(f"Deleted {len(results['ids'])} documents from ChromaDB collection")
+            else:
+                logger.info("ChromaDB collection is already empty")
         except Exception as e:
             logger.error(f"Failed to clear collection: {e}")
     
