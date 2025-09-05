@@ -45,6 +45,13 @@ class DocumentIndexer:
         )
         self.normalizer = NormalizerGovKR()
         
+        # Import directive extractor (화이트리스트 기반 최신 버전)
+        if __name__ == "__main__":
+            from backend.processors.directive_extractor_whitelist_final import process_pdf_with_whitelist
+        else:
+            from processors.directive_extractor_whitelist_final import process_pdf_with_whitelist
+        self.process_directive_pdf = process_pdf_with_whitelist
+        
         # Lazy initialization to avoid blocking on startup
         self._whoosh = None
         self._chroma = None
@@ -115,7 +122,46 @@ class DocumentIndexer:
             if file_path.suffix.lower() == ".hwp":
                 doc = self.hwp_parser.parse_hwp(str(file_path))
             elif file_path.suffix.lower() == ".pdf":
-                doc = self.pdf_processor.parse_pdf(str(file_path))
+                # First process with directive extractor for structured content
+                try:
+                    logger.info(f"Processing PDF with directive extractor: {file_path.name}")
+                    directive_records, processed_text = self.process_directive_pdf(str(file_path))
+                    logger.info(f"Directive extractor found {len(directive_records)} structured directives")
+                    
+                    # Store processed results for later use
+                    stem = file_path.with_suffix("")
+                    directive_jsonl = f"{stem}_directive.jsonl"
+                    processed_txt = f"{stem}_processed.txt"
+                    
+                    # Save directive results
+                    import json
+                    with open(directive_jsonl, "w", encoding="utf-8") as f:
+                        for record in directive_records:
+                            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    
+                    with open(processed_txt, "w", encoding="utf-8") as f:
+                        f.write(processed_text)
+                    
+                    logger.info(f"Saved directive results to {directive_jsonl} and {processed_txt}")
+                    
+                    # Use traditional parsing method but enhance with directive data
+                    doc = self.pdf_processor.parse_pdf(str(file_path))
+                    
+                    # Enhance document with directive-processed content
+                    if doc and 'pages' in doc:
+                        # Replace page content with processed text where available
+                        processed_lines = processed_text.split('\n')
+                        for i, page in enumerate(doc['pages']):
+                            if i < len(processed_lines):
+                                # Keep metadata but use processed text
+                                page['processed_text'] = processed_text
+                                page['directive_records'] = directive_records
+                                
+                    logger.info(f"Enhanced PDF parsing with directive processing")
+                    
+                except Exception as e:
+                    logger.warning(f"Directive processing failed, falling back to standard PDF processing: {e}")
+                    doc = self.pdf_processor.parse_pdf(str(file_path))
             else:
                 logger.warning(f"Unsupported file type: {file_path.suffix}")
                 return {"status": "skipped", "file": str(file_path), "error": "Unsupported file type"}
