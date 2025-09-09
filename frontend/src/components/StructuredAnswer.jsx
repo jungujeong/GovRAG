@@ -3,19 +3,44 @@ import CitationPopup from './CitationPopup'
 
 function StructuredAnswer({ answer }) {
   const [selectedCitation, setSelectedCitation] = useState(null)
+  const [copySuccess, setCopySuccess] = useState(false)
   
-  // Simple markdown renderer for basic formatting
+  // Enhanced markdown renderer with line breaks
   const renderMarkdown = (text) => {
     if (!text) return text
     
-    // Convert **bold** to <strong> tags
-    const parts = text.split(/\*\*(.*?)\*\*/g)
-    return parts.map((part, index) => {
-      if (index % 2 === 1) {
-        return <strong key={index} className="font-bold">{part}</strong>
-      }
-      return part
+    // First, split by line breaks to preserve them
+    const lines = text.split('\n')
+    
+    return lines.map((line, lineIndex) => {
+      // Convert **bold** to <strong> tags within each line
+      const parts = line.split(/\*\*(.*?)\*\*/g)
+      const formattedLine = parts.map((part, partIndex) => {
+        if (partIndex % 2 === 1) {
+          return <strong key={`${lineIndex}-${partIndex}`} className="font-bold">{part}</strong>
+        }
+        return part
+      })
+      
+      // Return each line with proper line breaks
+      return (
+        <React.Fragment key={lineIndex}>
+          {formattedLine}
+          {lineIndex < lines.length - 1 && <br />}
+        </React.Fragment>
+      )
     })
+  }
+  
+  // Copy text to clipboard
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopySuccess(true)
+      setTimeout(() => setCopySuccess(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
   }
   
   if (!answer) return null
@@ -41,9 +66,32 @@ function StructuredAnswer({ answer }) {
       </div>
       
       {/* Core Answer */}
-      <div className="mb-6 p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
-        <h3 className="text-xl font-semibold mb-2">📌 핵심 답변</h3>
-        <div className="text-lg text-gray-800 leading-relaxed whitespace-pre-wrap">
+      <div className="mb-6 p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500 relative">
+        <div className="flex items-start justify-between mb-2">
+          <h3 className="text-xl font-semibold">📌 핵심 답변</h3>
+          <button
+            onClick={() => copyToClipboard(answer.answer || '')}
+            className="px-3 py-1 text-sm bg-white hover:bg-gray-100 border border-gray-300 rounded-md transition-colors flex items-center gap-2"
+            title="답변 복사"
+          >
+            {copySuccess ? (
+              <>
+                <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                복사됨
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                복사
+              </>
+            )}
+          </button>
+        </div>
+        <div className="text-lg text-gray-800 leading-relaxed">
           {renderMarkdown(answer.answer) || '답변을 생성할 수 없습니다.'}
         </div>
       </div>
@@ -59,7 +107,7 @@ function StructuredAnswer({ answer }) {
                 className="flex items-start p-3 bg-gray-50 rounded-lg"
               >
                 <span className="text-green-600 mr-3 text-xl">✓</span>
-                <div className="text-lg whitespace-pre-wrap">{renderMarkdown(fact)}</div>
+                <div className="text-lg">{renderMarkdown(fact)}</div>
               </li>
             ))}
           </ul>
@@ -70,7 +118,7 @@ function StructuredAnswer({ answer }) {
       {answer.details && (
         <div className="mb-6">
           <h3 className="text-xl font-semibold mb-3">📝 상세 설명</h3>
-          <div className="text-lg text-gray-700 leading-relaxed whitespace-pre-wrap">
+          <div className="text-lg text-gray-700 leading-relaxed">
             {renderMarkdown(answer.details)}
           </div>
         </div>

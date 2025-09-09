@@ -65,29 +65,142 @@ class CitationTracker:
     def _add_inline_citations(self, text: str, evidences: List[Dict]) -> str:
         """Add inline citation markers to text"""
         
-        # Find sentences that match evidence
-        sentences = self._split_sentences(text)
-        cited_sentences = []
+        # Parse existing citations in text (e.g., "1.[1]", "2.[1]", "3.[2]")
+        # and map them to correct evidence indices
+        citation_pattern = r'(\d+\.)\[(\d+)\]'
         
-        for sentence in sentences:
-            citation_added = False
+        # Create a mapping of evidence content to index
+        evidence_map = {}
+        for idx, evidence in enumerate(evidences, 1):
+            evidence_text = evidence.get("text", "")
+            doc_id = evidence.get("doc_id", "")
+            page = evidence.get("page", 0)
             
-            for idx, evidence in enumerate(evidences, 1):
-                evidence_text = evidence.get("text", "")
-                
-                # Check if sentence is from this evidence
-                if self._sentence_from_evidence(sentence, evidence_text):
-                    # Add citation
-                    cited_sentence = f"{sentence}[{idx}]"
-                    cited_sentences.append(cited_sentence)
-                    citation_added = True
-                    break
-            
-            if not citation_added:
-                cited_sentences.append(sentence)
+            # Create unique key for this evidence
+            key = f"{doc_id}_{page}"
+            if key not in evidence_map:
+                evidence_map[key] = idx
         
-        # Reconstruct text
-        return " ".join(cited_sentences)
+        # Process text to fix citations
+        lines = text.split('\n')
+        fixed_lines = []
+        
+        for line in lines:
+            # Check if this line contains numbered items with citations
+            if re.match(r'^\d+\.\[', line):
+                # Extract the content and find matching evidence
+                fixed_line = self._fix_line_citation(line, evidences, evidence_map)
+                fixed_lines.append(fixed_line)
+            else:
+                # For non-numbered lines, add citations based on content matching
+                fixed_line = self._add_citations_to_line(line, evidences)
+                fixed_lines.append(fixed_line)
+        
+        return '\n'.join(fixed_lines)
+    
+    def _fix_line_citation(self, line: str, evidences: List[Dict], evidence_map: Dict) -> str:
+        """Fix citation number in a numbered line"""
+        # Extract item number and content
+        match = re.match(r'^(\d+)\.\[(\d+)\]\s*(.*)', line)
+        if not match:
+            return line
+        
+        item_num = match.group(1)
+        old_cite = match.group(2)
+        content = match.group(3)
+        
+        # Find the best matching evidence for this content
+        best_match_idx = None
+        best_score = 0
+        
+        for idx, evidence in enumerate(evidences, 1):
+            evidence_text = evidence.get("text", "")
+            score = self._calculate_content_similarity(content, evidence_text)
+            
+            if score > best_score:
+                best_score = score
+                best_match_idx = idx
+        
+        # If we found a good match, use that citation number
+        if best_match_idx and best_score > 0.3:
+            return f"{item_num}.[{best_match_idx}] {content}"
+        else:
+            # Keep original if no good match found
+            return line
+    
+    def _add_citations_to_line(self, line: str, evidences: List[Dict]) -> str:
+        """Add citations to a line based on content matching"""
+        if not line.strip():
+            return line
+        
+        # Check which evidence this line matches
+        best_match_idx = None
+        best_score = 0
+        
+        for idx, evidence in enumerate(evidences, 1):
+            evidence_text = evidence.get("text", "")
+            score = self._calculate_content_similarity(line, evidence_text)
+            
+            if score > best_score:
+                best_score = score
+                best_match_idx = idx
+        
+        # Add citation if good match found and not already present
+        if best_match_idx and best_score > 0.3 and not re.search(r'\[\d+\]', line):
+            return f"{line}[{best_match_idx}]"
+        
+        return line
+    
+    def _calculate_content_similarity(self, text1: str, text2: str) -> float:
+        """Calculate similarity between two text segments"""
+        # Normalize texts
+        norm1 = self._normalize_text(text1)
+        norm2 = self._normalize_text(text2)
+        
+        if not norm1 or not norm2:
+            return 0.0
+        
+        # Check for substring match
+        if norm1 in norm2:
+            return 1.0
+        
+        # Calculate word overlap
+        words1 = set(norm1.split())
+        words2 = set(norm2.split())
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = words1.intersection(words2)
+        
+        # Use Jaccard similarity
+        union = words1.union(words2)
+        jaccard = len(intersection) / len(union) if union else 0.0
+        
+        # Also consider partial matches for Korean text
+        # (important keywords matching is more important than exact phrase matching)
+        important_keywords = self._extract_important_keywords(norm1)
+        if important_keywords:
+            keyword_matches = sum(1 for kw in important_keywords if kw in norm2)
+            keyword_score = keyword_matches / len(important_keywords)
+            
+            # Weighted average of jaccard and keyword matching
+            return 0.6 * jaccard + 0.4 * keyword_score
+        
+        return jaccard
+    
+    def _extract_important_keywords(self, text: str) -> List[str]:
+        """Extract important keywords from text"""
+        # Remove common Korean particles and short words
+        words = text.split()
+        keywords = []
+        
+        for word in words:
+            # Keep words that are likely to be meaningful (longer than 2 chars)
+            if len(word) > 2:
+                keywords.append(word)
+        
+        return keywords
     
     def _sentence_from_evidence(self, sentence: str, evidence: str) -> bool:
         """Check if sentence comes from evidence"""

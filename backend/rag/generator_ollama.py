@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from typing import Dict, List, Optional, AsyncIterator
 import asyncio
 import logging
@@ -109,8 +110,10 @@ class OllamaGenerator:
         """Parse LLM response into structured format"""
         
         # Remove think tags if present
-        import re
         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+        
+        # Clean up any non-Korean language remnants
+        content = self._clean_non_korean(content)
         
         # Initialize result
         result = {
@@ -144,14 +147,17 @@ class OllamaGenerator:
             
             # Add content to sections
             if current_section == "answer" and line:
-                result["answer"] += line + " "
+                cleaned_line = self._clean_non_korean(line)
+                result["answer"] += cleaned_line + " "
             elif current_section == "key_facts" and line:
-                if line.startswith(("-", "•", "*", "·")):
-                    result["key_facts"].append(line[1:].strip())
-                elif line:
-                    result["key_facts"].append(line)
+                cleaned_line = self._clean_non_korean(line)
+                if cleaned_line.startswith(("-", "•", "*", "·")):
+                    result["key_facts"].append(cleaned_line[1:].strip())
+                elif cleaned_line:
+                    result["key_facts"].append(cleaned_line)
             elif current_section == "details" and line:
-                result["details"] += line + " "
+                cleaned_line = self._clean_non_korean(line)
+                result["details"] += cleaned_line + " "
             elif current_section == "sources" and line:
                 # Parse source format
                 source = self._parse_source(line)
@@ -164,13 +170,49 @@ class OllamaGenerator:
         
         # If no structured parsing worked, use whole content as answer
         if not result["answer"] and not result["key_facts"]:
-            result["answer"] = content.strip()
+            result["answer"] = self._clean_non_korean(content.strip())
         
         return result
     
+    def _clean_non_korean(self, text: str) -> str:
+        """Remove non-Korean language content using Unicode ranges"""
+        if not text:
+            return text
+        
+        # Define allowed Unicode ranges
+        # Korean characters: Hangul Syllables (AC00-D7AF), Jamo (1100-11FF, 3130-318F, A960-A97F, D7B0-D7FF)
+        # Also keep ASCII printable characters (0020-007E) for numbers, basic punctuation, and English names
+        # Add common punctuation that might be used in Korean text
+        allowed_chars = []
+        
+        for char in text:
+            code = ord(char)
+            # Keep Korean characters
+            if (0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
+                0x1100 <= code <= 0x11FF or  # Hangul Jamo
+                0x3130 <= code <= 0x318F or  # Hangul Compatibility Jamo
+                0xA960 <= code <= 0xA97F or  # Hangul Jamo Extended-A
+                0xD7B0 <= code <= 0xD7FF):   # Hangul Jamo Extended-B
+                allowed_chars.append(char)
+            # Keep ASCII printable characters (space to ~)
+            elif 0x0020 <= code <= 0x007E:
+                allowed_chars.append(char)
+            # Keep common Korean punctuation
+            elif char in '·、。「」『』〈〉《》【】〔〕':
+                allowed_chars.append(char)
+            # Replace other characters with space to maintain word boundaries
+            else:
+                allowed_chars.append(' ')
+        
+        result = ''.join(allowed_chars)
+        
+        # Clean up multiple spaces
+        result = re.sub(r'\s+', ' ', result)
+        
+        return result.strip()
+    
     def _parse_source(self, line: str) -> Optional[Dict]:
         """Parse source citation line"""
-        import re
         
         # Pattern: (doc_id, p.X, start-end)
         pattern = r'\(([^,]+),\s*p\.(\d+),\s*(\d+)-(\d+)\)'
