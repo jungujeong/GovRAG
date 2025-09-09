@@ -34,7 +34,12 @@
       "Bash(git reset:*)",
       "Bash(git remote set-url:*)",
       "Bash(ssh:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(gh pr:*)",
+      "Bash(pkill:*)",
+      "Bash(npm install)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)"
     ],
     "deny": [],
     "ask": []

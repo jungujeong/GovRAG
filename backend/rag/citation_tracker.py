@@ -2,6 +2,8 @@ import re
 from typing import Dict, List, Tuple, Optional
 import json
 import logging
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +13,8 @@ class CitationTracker:
     def __init__(self):
         self.citations = []
         self.citation_map = {}
+        self.embedder = None
+        self._init_embedder()
     
     def track_citations(self, 
                        response: Dict,
@@ -51,8 +55,8 @@ class CitationTracker:
                 "index": idx,
                 "doc_id": evidence.get("doc_id", "unknown"),
                 "page": evidence.get("page", 0),
-                "start_char": evidence.get("start_char", 0),
-                "end_char": evidence.get("end_char", 0),
+                "start_char": evidence.get("start_char", -1),
+                "end_char": evidence.get("end_char", -1),
                 "chunk_id": evidence.get("chunk_id", "")
             }
         
@@ -115,8 +119,8 @@ class CitationTracker:
                     "index": idx,
                     "doc_id": evidence.get("doc_id", "unknown"),
                     "page": evidence.get("page", 0),
-                    "start_char": evidence.get("start_char", 0),
-                    "end_char": evidence.get("end_char", 0),
+                    "start_char": evidence.get("start_char", -1),
+                    "end_char": evidence.get("end_char", -1),
                     "chunk_id": evidence.get("chunk_id", ""),
                     "text_snippet": evidence.get("text", "")
                 })
@@ -138,8 +142,8 @@ class CitationTracker:
                     formatted.append({
                         "doc_id": doc_id,
                         "page": page,
-                        "start_char": matching_evidence.get("start_char", 0),
-                        "end_char": matching_evidence.get("end_char", 0),
+                        "start_char": matching_evidence.get("start_char", -1),
+                        "end_char": matching_evidence.get("end_char", -1),
                         "chunk_id": matching_evidence.get("chunk_id", ""),
                         "text_snippet": matching_evidence.get("text", "")
                     })
@@ -178,11 +182,175 @@ class CitationTracker:
             if page:
                 line += f", {page}페이지"
             
-            start = citation.get("start_char", 0)
-            end = citation.get("end_char", 0)
-            if start and end:
+            start = citation.get("start_char", -1)
+            end = citation.get("end_char", -1)
+            if start >= 0 and end >= 0:
                 line += f" ({start}-{end})"
             
             display_lines.append(line)
         
         return "\n".join(display_lines)
+    
+    def _init_embedder(self):
+        """Initialize sentence embedder for semantic similarity"""
+        try:
+            # Try Korean model first
+            self.embedder = SentenceTransformer('nlpai-lab/KoE5')
+            logger.info("Loaded Korean embedder: nlpai-lab/KoE5")
+        except Exception as e:
+            try:
+                # Fallback to multilingual model
+                self.embedder = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+                logger.info("Loaded multilingual embedder")
+            except Exception as e2:
+                logger.warning(f"Failed to load embedders: {e}, {e2}")
+                self.embedder = None
+    
+    def validate_citation_accuracy(self, answer: str, evidences: List[Dict]) -> Dict:
+        """Validate citation accuracy using multiple metrics"""
+        validation_result = {
+            "overall_score": 0.0,
+            "jaccard_score": 0.0,
+            "semantic_score": 0.0,
+            "length_ratio": 0.0,
+            "citation_coverage": 0.0,
+            "is_valid": False,
+            "details": []
+        }
+        
+        if not evidences:
+            return validation_result
+        
+        # Combine all evidence texts
+        combined_evidence = " ".join([ev.get("text", "") for ev in evidences])
+        
+        # 1. Jaccard similarity
+        jaccard_score = self._calculate_jaccard_similarity(answer, combined_evidence)
+        validation_result["jaccard_score"] = jaccard_score
+        
+        # 2. Semantic similarity (if embedder available)
+        semantic_score = 0.0
+        if self.embedder:
+            semantic_score = self._calculate_semantic_similarity(answer, combined_evidence)
+        validation_result["semantic_score"] = semantic_score
+        
+        # 3. Length ratio check
+        answer_length = len(answer.strip())
+        evidence_length = len(combined_evidence.strip())
+        length_ratio = min(answer_length / max(evidence_length, 1), 1.0)
+        validation_result["length_ratio"] = length_ratio
+        
+        # 4. Citation coverage (how much of answer is covered by evidences)
+        coverage = self._calculate_citation_coverage(answer, evidences)
+        validation_result["citation_coverage"] = coverage
+        
+        # 5. Overall score calculation
+        weights = {
+            "jaccard": 0.3,
+            "semantic": 0.3 if self.embedder else 0.0,
+            "length": 0.2,
+            "coverage": 0.2
+        }
+        
+        # Adjust weights if no semantic model
+        if not self.embedder:
+            weights["jaccard"] = 0.4
+            weights["length"] = 0.3
+            weights["coverage"] = 0.3
+        
+        overall_score = (
+            jaccard_score * weights["jaccard"] +
+            semantic_score * weights["semantic"] +
+            length_ratio * weights["length"] +
+            coverage * weights["coverage"]
+        )
+        
+        validation_result["overall_score"] = overall_score
+        validation_result["is_valid"] = overall_score >= 0.7  # Threshold
+        
+        # Add detailed analysis
+        validation_result["details"] = self._generate_validation_details(
+            answer, evidences, validation_result
+        )
+        
+        return validation_result
+    
+    def _calculate_jaccard_similarity(self, text1: str, text2: str) -> float:
+        """Calculate Jaccard similarity between two texts"""
+        # Normalize texts
+        norm_text1 = set(self._normalize_text(text1).split())
+        norm_text2 = set(self._normalize_text(text2).split())
+        
+        if not norm_text1 or not norm_text2:
+            return 0.0
+        
+        intersection = norm_text1.intersection(norm_text2)
+        union = norm_text1.union(norm_text2)
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    def _calculate_semantic_similarity(self, text1: str, text2: str) -> float:
+        """Calculate semantic similarity using embeddings"""
+        if not self.embedder:
+            return 0.0
+        
+        try:
+            embeddings = self.embedder.encode([text1, text2])
+            similarity = np.dot(embeddings[0], embeddings[1]) / (
+                np.linalg.norm(embeddings[0]) * np.linalg.norm(embeddings[1])
+            )
+            return float(similarity)
+        except Exception as e:
+            logger.warning(f"Semantic similarity calculation failed: {e}")
+            return 0.0
+    
+    def _calculate_citation_coverage(self, answer: str, evidences: List[Dict]) -> float:
+        """Calculate how much of the answer is covered by evidences"""
+        answer_sentences = self._split_sentences(answer)
+        covered_sentences = 0
+        
+        for sentence in answer_sentences:
+            for evidence in evidences:
+                evidence_text = evidence.get("text", "")
+                if self._sentence_from_evidence(sentence, evidence_text):
+                    covered_sentences += 1
+                    break
+        
+        return covered_sentences / len(answer_sentences) if answer_sentences else 0.0
+    
+    def _generate_validation_details(self, answer: str, evidences: List[Dict], 
+                                   validation_result: Dict) -> List[str]:
+        """Generate detailed validation analysis"""
+        details = []
+        
+        # Jaccard analysis
+        jaccard = validation_result["jaccard_score"]
+        if jaccard < 0.5:
+            details.append(f"낮은 어휘 유사도 ({jaccard:.2f}): 답변이 원문과 다른 표현을 많이 사용")
+        elif jaccard > 0.8:
+            details.append(f"높은 어휘 유사도 ({jaccard:.2f}): 원문을 잘 반영")
+        
+        # Semantic analysis
+        semantic = validation_result["semantic_score"]
+        if semantic > 0 and semantic < 0.6:
+            details.append(f"낮은 의미 유사도 ({semantic:.2f}): 의미적으로 원문과 차이")
+        elif semantic > 0.8:
+            details.append(f"높은 의미 유사도 ({semantic:.2f}): 의미가 원문과 일치")
+        
+        # Coverage analysis
+        coverage = validation_result["citation_coverage"]
+        if coverage < 0.7:
+            details.append(f"낮은 인용 커버리지 ({coverage:.2f}): 근거 없는 내용 포함 가능성")
+        elif coverage > 0.9:
+            details.append(f"높은 인용 커버리지 ({coverage:.2f}): 대부분 근거에 기반")
+        
+        # Overall assessment
+        overall = validation_result["overall_score"]
+        if overall < 0.5:
+            details.append("전체 평가: 부정확한 인용 - 재생성 권장")
+        elif overall < 0.7:
+            details.append("전체 평가: 보통 수준 - 검토 필요")
+        else:
+            details.append("전체 평가: 정확한 인용")
+        
+        return details

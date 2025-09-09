@@ -19,9 +19,6 @@ class AnswerFormatter:
     def format_response(self, response: Dict) -> Dict:
         """Format response according to schema"""
         
-        # Filter sources to only include those cited in the answer
-        response = self._filter_cited_sources(response)
-        
         formatted = {
             "formatted_text": self._format_as_text(response),
             "formatted_html": self._format_as_html(response),
@@ -171,75 +168,6 @@ class AnswerFormatter:
         }
         
         return json.dumps(json_data, ensure_ascii=False, indent=2)
-    
-    def _filter_cited_sources(self, response: Dict) -> Dict:
-        """Filter sources to only include those actually cited in the answer text"""
-        answer_text = response.get("answer", "")
-        sources = response.get("sources", [])
-        
-        if not answer_text or not sources:
-            return response
-        
-        # Extract citation numbers from answer text
-        cited_numbers = set()
-        
-        # Look for various citation patterns
-        patterns = [
-            r'\[(\d+)\]',          # [1], [2]
-            r'\d+\.\[(\d+)\]',     # 1.[1], 2.[1]
-            r'문서\s*(\d+)',        # 문서 1, 문서1
-            r'\*\*문서\s*(\d+)',    # **문서 1
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, answer_text)
-            for match in matches:
-                try:
-                    cited_numbers.add(int(match))
-                except ValueError:
-                    continue
-        
-        # Special handling: if only [1] is cited repeatedly, check if it makes sense
-        if len(cited_numbers) == 1 and 1 in cited_numbers:
-            # Count how many times [1] appears
-            count_1 = len(re.findall(r'\[1\]', answer_text))
-            # If [1] appears multiple times but we have multiple sources,
-            # it might be referring to different sources
-            if count_1 > 1 and len(sources) > 1:
-                # Look for contextual clues like "문서1", "문서2"
-                doc_mentions = re.findall(r'문서\s*(\d+)', answer_text)
-                if doc_mentions:
-                    for doc_num in doc_mentions:
-                        try:
-                            cited_numbers.add(int(doc_num))
-                        except ValueError:
-                            continue
-        
-        # If no citations found in text, keep top N sources based on content
-        if not cited_numbers:
-            logger.warning("No citations found in answer text, keeping top 3 sources")
-            response["sources"] = sources[:3]  # Keep only top 3 most relevant
-            return response
-        
-        # Filter sources to only include cited ones
-        filtered_sources = []
-        max_cited = max(cited_numbers) if cited_numbers else 0
-        
-        # Include sources up to the maximum cited number
-        for i in range(min(max_cited, len(sources))):
-            if (i + 1) in cited_numbers or len(cited_numbers) == 1:
-                filtered_sources.append(sources[i])
-        
-        # If we still have too many sources, limit to reasonable number
-        if len(filtered_sources) > 5:
-            filtered_sources = filtered_sources[:5]
-        
-        logger.info(f"Filtered sources: {len(sources)} -> {len(filtered_sources)} (cited: {sorted(cited_numbers)})")
-        
-        # Update response with filtered sources
-        response["sources"] = filtered_sources
-        
-        return response
     
     def _escape_html(self, text: str) -> str:
         """Escape HTML special characters"""

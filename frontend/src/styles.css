@@ -39,6 +39,23 @@
   }
 }
 
+@layer utilities {
+  /* Line clamp utility for text truncation */
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
 @layer components {
   .btn-primary {
     @apply bg-blue-600 text-white px-6 py-3 rounded-lg font-medium text-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition-all;
