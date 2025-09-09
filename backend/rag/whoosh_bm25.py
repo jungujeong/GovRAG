@@ -10,6 +10,7 @@ from whoosh.writing import AsyncWriter
 import logging
 
 from config import config
+from utils.index_integrity import IndexIntegrityChecker, safe_index_operation
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class WhooshBM25:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.index = None
         self.schema = self._create_schema()
+        self.integrity_checker = IndexIntegrityChecker(self.index_dir / "main")
         self._open_or_create_index()
     
     def _create_schema(self) -> Schema:
@@ -46,16 +48,49 @@ class WhooshBM25:
         )
     
     def _open_or_create_index(self):
-        """Open existing index or create new one"""
+        """Open existing index or create new one with integrity checks"""
         index_path = self.index_dir / "main"
         
-        if index.exists_in(str(index_path)):
-            logger.info(f"Opening existing Whoosh index at {index_path}")
-            self.index = index.open_dir(str(index_path))
-        else:
+        # Check if index exists and is valid
+        index_exists = False
+        try:
+            if index_path.exists() and index.exists_in(str(index_path)):
+                # Verify integrity
+                is_valid, issues = self.integrity_checker.verify_integrity()
+                if not is_valid:
+                    logger.warning(f"Index integrity issues detected: {issues}")
+                    # Attempt auto-repair
+                    if self.integrity_checker.auto_repair():
+                        logger.info("Index auto-repair successful")
+                    else:
+                        logger.warning("Auto-repair failed, will recreate index")
+                        if index_path.exists():
+                            import shutil
+                            shutil.rmtree(str(index_path))
+                
+                # Try to open again after potential repair
+                if index_path.exists() and index.exists_in(str(index_path)):
+                    self.index = index.open_dir(str(index_path))
+                    logger.info(f"Opened existing Whoosh index at {index_path}")
+                    index_exists = True
+        except Exception as e:
+            logger.warning(f"Failed to open existing index: {e}")
+            # Attempt auto-repair
+            if self.integrity_checker.auto_repair():
+                logger.info("Auto-repair completed, trying to open again")
+                try:
+                    if index_path.exists() and index.exists_in(str(index_path)):
+                        self.index = index.open_dir(str(index_path))
+                        index_exists = True
+                except Exception as e2:
+                    logger.warning(f"Failed to open after repair: {e2}")
+        
+        if not index_exists:
             logger.info(f"Creating new Whoosh index at {index_path}")
             index_path.mkdir(parents=True, exist_ok=True)
             self.index = index.create_in(str(index_path), self.schema)
+            # Save initial integrity snapshot
+            self.integrity_checker.save_integrity_snapshot()
     
     @classmethod
     def initialize(cls):
@@ -64,7 +99,22 @@ class WhooshBM25:
         index_dir.mkdir(parents=True, exist_ok=True)
         
         index_path = index_dir / "main"
-        if not index.exists_in(str(index_path)):
+        
+        # Check if index exists and is valid
+        index_exists = False
+        try:
+            index_exists = index.exists_in(str(index_path))
+        except Exception as e:
+            logger.warning(f"Index check failed, assuming corrupted: {e}")
+            index_exists = False
+        
+        if not index_exists:
+            # Remove any corrupted files and recreate
+            if index_path.exists():
+                import shutil
+                shutil.rmtree(str(index_path))
+                logger.info("Removed corrupted index directory")
+            
             index_path.mkdir(parents=True, exist_ok=True)
             # Create schema and index
             analyzer = get_korean_analyzer()
@@ -82,31 +132,34 @@ class WhooshBM25:
             logger.info(f"Initialized Whoosh index at {index_path}")
     
     def index_chunks(self, chunks: List[Dict]):
-        """Index a batch of chunks"""
+        """Index a batch of chunks with integrity protection"""
         if not chunks:
             return
         
-        writer = AsyncWriter(self.index)
-        
-        try:
-            for chunk in chunks:
-                writer.add_document(
-                    chunk_id=chunk.get("chunk_id", ""),
-                    doc_id=chunk.get("doc_id", ""),
-                    text=chunk.get("text", ""),
-                    page=chunk.get("page", 0),
-                    start_char=chunk.get("start_char", 0),
-                    end_char=chunk.get("end_char", 0),
-                    type=chunk.get("type", "content"),
-                    section_or_page=chunk.get("section_or_page", 0)
-                )
+        # Use safe operation context
+        with safe_index_operation(self.integrity_checker):
+            writer = AsyncWriter(self.index)
             
-            writer.commit()
-            logger.info(f"Indexed {len(chunks)} chunks in Whoosh")
-            
-        except Exception as e:
-            logger.error(f"Failed to index chunks: {e}")
-            writer.cancel()
+            try:
+                for chunk in chunks:
+                    writer.add_document(
+                        chunk_id=chunk.get("chunk_id", ""),
+                        doc_id=chunk.get("doc_id", ""),
+                        text=chunk.get("text", ""),
+                        page=chunk.get("page", 0),
+                        start_char=chunk.get("start_char", 0),
+                        end_char=chunk.get("end_char", 0),
+                        type=chunk.get("type", "content"),
+                        section_or_page=chunk.get("section_or_page", 0)
+                    )
+                
+                writer.commit()
+                logger.info(f"Indexed {len(chunks)} chunks in Whoosh")
+                
+            except Exception as e:
+                writer.cancel()
+                logger.error(f"Failed to index chunks: {e}")
+                raise
     
     def search(self, query: str, limit: int = None) -> List[Dict]:
         """Search using BM25 scoring"""

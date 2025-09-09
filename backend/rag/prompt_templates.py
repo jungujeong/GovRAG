@@ -3,13 +3,22 @@ from typing import List, Dict
 class PromptTemplates:
     """Evidence-Only generation prompt templates"""
     
-    # 단순화된 시스템 프롬프트
-    SYSTEM_PROMPT = """한국어로 답변하는 문서 검색 도우미입니다.
-제공된 문서 내용을 바탕으로 답변합니다.
-부서명이 있다면 포함하여 답변하세요.
-문서명이나 파일명은 언급하지 마세요."""
+    # 정확도 제약조건이 강화된 시스템 프롬프트
+    SYSTEM_PROMPT = """당신은 한국어로만 답변하는 문서 검색 도우미입니다.
+
+**절대적 규칙:**
+1. 모든 답변은 반드시 한국어로만 작성하세요.
+2. 영어, 일본어, 중국어 등 다른 언어는 절대 사용하지 마세요.
+3. 전문용어도 한국어로 번역하거나 한국어 설명을 추가하세요.
+4. 반드시 제공된 문서 내용만 사용하여 답변하세요.
+5. 근거가 없는 내용은 절대 생성하지 마세요.
+6. 모르는 내용은 "제공된 문서에서 해당 정보를 찾을 수 없습니다"라고 답하세요.
+7. 숫자, 날짜, 조항은 원문 그대로 정확히 인용하세요.
+8. 부서명이 있다면 포함하되, 문서명이나 파일명은 언급하지 마세요.
+9. 추측하거나 일반적인 지식을 추가하지 마세요.
+10. 답변 형식은 자연스러운 한국어 문장으로 작성하세요."""
     
-    # 단순화된 프롬프트
+    # 정확도 강화된 사용자 프롬프트
     USER_PROMPT_TEMPLATE = """다음 문서 내용을 참고하여 질문에 답변하세요.
 
 문서 내용:
@@ -17,12 +26,20 @@ class PromptTemplates:
 
 질문: {query}
 
-답변 시 부서명이 있다면 포함하되, 문서명이나 파일명은 언급하지 마세요.
+**답변 규칙:**
+- 모든 답변은 반드시 한국어로만 작성하세요
+- 제공된 문서 내용만 사용하세요
+- 근거 없는 추측 금지
+- 부서명 포함, 파일명 제외
+- 숫자/날짜/조항은 원문 그대로
+- 마크다운 형식은 사용하지 말고 일반 텍스트로 작성하세요
+- **굵은 글씨**, *기울임*, # 제목 등의 마크다운 문법을 사용하지 마세요
 
-답변:"""
+답변 (한국어로만):"""
     
-    # 증거 형식에서 파일명 제거, 내용과 부서명만 포함
-    EVIDENCE_FORMAT = """{text}"""
+    # 증거 형식에 메타데이터 포함 (파일명 제외)
+    EVIDENCE_FORMAT = """[문서 {idx}, 페이지 {page}]
+{text}"""
     
     OUTPUT_SCHEMA = {
         "answer": {
@@ -69,8 +86,13 @@ class PromptTemplates:
         
         for idx, evidence in enumerate(evidences, 1):
             text = evidence.get("text", "")
-            # Always use the same format - no filename, only content
-            formatted_evidence = cls.EVIDENCE_FORMAT.format(text=text)
+            page = evidence.get("page", 0)
+            # Include metadata for context but exclude filename
+            formatted_evidence = cls.EVIDENCE_FORMAT.format(
+                idx=idx,
+                page=page,
+                text=text
+            )
             formatted_evidences.append(formatted_evidence)
         
         return cls.USER_PROMPT_TEMPLATE.format(

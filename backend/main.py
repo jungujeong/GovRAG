@@ -8,7 +8,7 @@ from pathlib import Path
 
 from config import config
 from routers import query, admin, documents
-from utils.logging import setup_logging
+from utils.log_utils import setup_logging
 
 # Setup logging
 logger = setup_logging()

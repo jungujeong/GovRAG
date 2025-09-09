@@ -1,4 +1,4 @@
-.PHONY: install bundle index qa run clean setup validate
+.PHONY: install bundle index qa run clean setup validate index-backup index-restore index-verify index-repair index-list index-clean
 
 install:
 	@echo "Installing dependencies..."
@@ -22,7 +22,7 @@ bundle:
 
 index:
 	@echo "Indexing documents..."
-	python3 -c "from backend.processors.indexer import index_all_documents; index_all_documents()"
+	cd backend && PYTHONPATH=. python3 -c "import asyncio; from processors.indexer import index_all_documents; asyncio.run(index_all_documents())"
 	@echo "Indexing complete!"
 
 qa:
@@ -54,3 +54,33 @@ validate:
 	@echo "Validating installation..."
 	python3 tools/validate_installation.py
 	@echo "Validation complete!"
+
+# Index management commands
+index-backup:
+	@echo "Creating index backup..."
+	cd backend && python3 utils/index_manager.py backup
+	@echo "Backup complete!"
+
+index-restore:
+	@echo "Restoring index from backup..."
+	cd backend && python3 utils/index_manager.py restore
+	@echo "Restore complete!"
+
+index-verify:
+	@echo "Verifying index integrity..."
+	cd backend && python3 utils/index_manager.py verify
+	@echo "Verification complete!"
+
+index-repair:
+	@echo "Repairing corrupted indexes..."
+	cd backend && python3 utils/index_manager.py repair
+	@echo "Repair complete!"
+
+index-list:
+	@echo "Listing available backups..."
+	cd backend && python3 utils/index_manager.py list
+
+index-clean:
+	@echo "Cleaning old backups..."
+	cd backend && python3 utils/index_manager.py clean
+	@echo "Cleanup complete!"

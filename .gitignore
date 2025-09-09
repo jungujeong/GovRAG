@@ -32,7 +32,7 @@ yarn-error.log*
 *~
 .DS_Store
 
-# Data and indexes
+# Data and indexes - NEVER commit these
 data/documents/*
 data/index/*
 data/chroma/*
@@ -40,6 +40,25 @@ data/extracted_directives/*
 data/extracted_directives_v2/*
 reports/*.html
 reports/*.json
+
+# Whoosh index files (extra protection)
+*.toc
+*.seg
+*.w
+*.pkl
+*.fdt
+*.fdx
+*.fnm
+*.frq
+*.nrm
+*.prx
+*.tii
+*.tis
+
+# ChromaDB files (extra protection)
+*.sqlite3
+*.sqlite3-*
+chroma.sqlite3*
 
 # Keep directory structure
 !data/documents/.gitkeep

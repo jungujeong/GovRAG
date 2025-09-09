@@ -326,7 +326,7 @@ class HybridRetriever:
     def _calculate_keyword_relevance(self, keywords: List[str], text: str) -> float:
         """Calculate keyword relevance score with improved Korean handling"""
         if not keywords:
-            return 0.2  # Give some base score even without keywords
+            return 0.0
         
         text_lower = text.lower()
         query_lower = ' '.join(keywords).lower()
@@ -355,21 +355,13 @@ class HybridRetriever:
         # 4. Special handling for numbers and government terms
         number_match_score = self._calculate_number_match_score(keywords, text)
         
-        # 5. Length bonus for longer queries (assume more specific)
-        length_bonus = min(len(' '.join(keywords)) / 20.0, 0.1)  # Max 0.1 bonus
-        
-        # 6. Combined score with adjusted weights (more permissive)
+        # 5. Combined score with weights
         total_score = (
-            exact_score * 0.4 +           # Exact matches important but not overwhelming
-            partial_score * 0.25 +        # Partial matches more valuable
-            ngram_score * 0.25 +          # Semantic similarity more valuable
-            number_match_score * 0.1 +    # Number/term matching
-            length_bonus                  # Bonus for longer, more specific queries
+            exact_score * 0.5 +           # Exact matches most important
+            partial_score * 0.2 +         # Partial matches
+            ngram_score * 0.2 +           # Semantic similarity
+            number_match_score * 0.1      # Number/term matching
         )
-        
-        # 7. Ensure minimum score for any text with some similarity
-        if ngram_score > 0.05 or partial_matches > 0 or exact_matches > 0:
-            total_score = max(total_score, 0.1)  # Minimum relevance score
         
         return min(total_score, 1.0)
     

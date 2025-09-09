@@ -4,6 +4,20 @@ import CitationPopup from './CitationPopup'
 function StructuredAnswer({ answer }) {
   const [selectedCitation, setSelectedCitation] = useState(null)
   
+  // Simple markdown renderer for basic formatting
+  const renderMarkdown = (text) => {
+    if (!text) return text
+    
+    // Convert **bold** to <strong> tags
+    const parts = text.split(/\*\*(.*?)\*\*/g)
+    return parts.map((part, index) => {
+      if (index % 2 === 1) {
+        return <strong key={index} className="font-bold">{part}</strong>
+      }
+      return part
+    })
+  }
+  
   if (!answer) return null
   
   const isError = answer.error
@@ -29,9 +43,9 @@ function StructuredAnswer({ answer }) {
       {/* Core Answer */}
       <div className="mb-6 p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
         <h3 className="text-xl font-semibold mb-2">📌 핵심 답변</h3>
-        <p className="text-lg text-gray-800 leading-relaxed">
-          {answer.answer || '답변을 생성할 수 없습니다.'}
-        </p>
+        <div className="text-lg text-gray-800 leading-relaxed whitespace-pre-wrap">
+          {renderMarkdown(answer.answer) || '답변을 생성할 수 없습니다.'}
+        </div>
       </div>
       
       {/* Key Facts */}
@@ -45,7 +59,7 @@ function StructuredAnswer({ answer }) {
                 className="flex items-start p-3 bg-gray-50 rounded-lg"
               >
                 <span className="text-green-600 mr-3 text-xl">✓</span>
-                <span className="text-lg">{fact}</span>
+                <div className="text-lg whitespace-pre-wrap">{renderMarkdown(fact)}</div>
               </li>
             ))}
           </ul>
@@ -56,9 +70,9 @@ function StructuredAnswer({ answer }) {
       {answer.details && (
         <div className="mb-6">
           <h3 className="text-xl font-semibold mb-3">📝 상세 설명</h3>
-          <p className="text-lg text-gray-700 leading-relaxed whitespace-pre-wrap">
-            {answer.details}
-          </p>
+          <div className="text-lg text-gray-700 leading-relaxed whitespace-pre-wrap">
+            {renderMarkdown(answer.details)}
+          </div>
         </div>
       )}
       
@@ -79,12 +93,17 @@ function StructuredAnswer({ answer }) {
                     <p className="font-medium">{source.doc_id}</p>
                     <p className="text-sm text-gray-600">
                       {source.page}페이지
-                      {source.start_char && source.end_char && 
+                      {source.start_char && source.end_char && source.start_char !== -1 && 
                         ` (${source.start_char}-${source.end_char})`
                       }
+                      {source.keyword_relevance && (
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                          관련도: {(source.keyword_relevance * 100).toFixed(0)}%
+                        </span>
+                      )}
                     </p>
                     {source.text_snippet && (
-                      <p className="text-sm text-gray-500 mt-1 truncate">
+                      <p className="text-sm text-gray-500 mt-1 line-clamp-2">
                         {source.text_snippet}
                       </p>
                     )}
