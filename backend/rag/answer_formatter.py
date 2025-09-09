@@ -231,7 +231,7 @@ class AnswerFormatter:
         return json.dumps(json_data, ensure_ascii=False, indent=2)
     
     def _filter_cited_sources(self, response: Dict) -> Dict:
-        """Filter sources to only include those actually cited in the answer text"""
+        """Keep all sources but mark which ones are cited, preserving original numbering"""
         answer_text = response.get("answer", "")
         sources = response.get("sources", [])
         key_facts = response.get("key_facts", [])
@@ -239,6 +239,11 @@ class AnswerFormatter:
         
         if not sources:
             return response
+        
+        # Add original index to each source for reference
+        for idx, source in enumerate(sources, 1):
+            source["original_index"] = idx
+            source["is_cited"] = False  # Default to not cited
         
         # Combine all text to check for citations
         full_text = answer_text
@@ -270,38 +275,74 @@ class AnswerFormatter:
                 except ValueError:
                     continue
         
-        # If no citations found, analyze content to determine which sources were used
-        if not cited_numbers:
+        # Mark cited sources
+        if cited_numbers:
+            for num in cited_numbers:
+                if 0 < num <= len(sources):
+                    sources[num - 1]["is_cited"] = True
+                    logger.info(f"Marking source {num} as cited: {sources[num - 1].get('doc_id')}")
+        else:
+            # If no explicit citations, try content matching
             logger.info("No explicit citations found, analyzing content to match sources")
-            # Try to match content with sources
-            for idx, source in enumerate(sources, 1):
+            for idx, source in enumerate(sources):
                 source_text = source.get("text_snippet", "")
                 if source_text and self._content_matches_source(full_text, source_text):
-                    cited_numbers.add(idx)
-            
-            # If still no matches, keep top sources
-            if not cited_numbers:
-                logger.warning("Could not match content to sources, keeping top 3")
-                response["sources"] = sources[:3]
-                return response
+                    source["is_cited"] = True
+                    cited_numbers.add(idx + 1)
         
-        # Ensure all cited numbers are valid
-        valid_cited = set()
-        for num in cited_numbers:
-            if 0 < num <= len(sources):
-                valid_cited.add(num)
+        # If still no citations found, mark top 3 as cited
+        if not any(s.get("is_cited") for s in sources):
+            logger.warning("Could not match content to sources, marking top 3 as cited")
+            for i in range(min(3, len(sources))):
+                sources[i]["is_cited"] = True
+                cited_numbers.add(i + 1)
         
-        # Filter sources based on cited numbers
-        filtered_sources = []
-        for num in sorted(valid_cited):
-            if num <= len(sources):
-                filtered_sources.append(sources[num - 1])
+        # Log the result
+        cited_indices = [s["original_index"] for s in sources if s.get("is_cited")]
+        logger.info(f"Citation analysis: {len(sources)} total sources, cited: {cited_indices}")
         
-        # Log the filtering result
-        logger.info(f"Citation filtering: {len(sources)} sources -> {len(filtered_sources)} cited sources {sorted(valid_cited)}")
+        # Renumber cited sources sequentially
+        cited_sources = []
+        renumber_map = {}  # Map old citation numbers to new ones
+        new_index = 1
         
-        # Update response with filtered sources
-        response["sources"] = filtered_sources
+        for old_num in sorted(cited_numbers):
+            if 0 < old_num <= len(sources):
+                source = sources[old_num - 1].copy()
+                source["display_index"] = new_index  # New sequential number
+                source["original_index"] = old_num   # Keep original for reference
+                cited_sources.append(source)
+                renumber_map[old_num] = new_index
+                new_index += 1
+        
+        # Update citation numbers in the answer text
+        if renumber_map and response.get("answer"):
+            answer_text = response["answer"]
+            for old_num, new_num in sorted(renumber_map.items(), reverse=True):
+                # Replace [old_num] with [new_num]
+                answer_text = re.sub(rf'\[{old_num}\]', f'[{new_num}]', answer_text)
+            response["answer"] = answer_text
+        
+        # Update citation numbers in key_facts
+        if renumber_map and response.get("key_facts"):
+            updated_facts = []
+            for fact in response["key_facts"]:
+                for old_num, new_num in sorted(renumber_map.items(), reverse=True):
+                    fact = re.sub(rf'\[{old_num}\]', f'[{new_num}]', fact)
+                updated_facts.append(fact)
+            response["key_facts"] = updated_facts
+        
+        # Update citation numbers in details
+        if renumber_map and response.get("details"):
+            details = response["details"]
+            for old_num, new_num in sorted(renumber_map.items(), reverse=True):
+                details = re.sub(rf'\[{old_num}\]', f'[{new_num}]', details)
+            response["details"] = details
+        
+        response["sources"] = cited_sources
+        response["citation_map"] = renumber_map
+        
+        logger.info(f"Renumbered {len(cited_sources)} cited sources: {renumber_map}")
         
         return response
     
@@ -348,6 +389,11 @@ class AnswerFormatter:
         if not text:
             return text
         
+        # First preserve existing line breaks if they exist
+        if '\n' in text:
+            # Keep existing formatting
+            return text
+        
         # Split long paragraphs at sentence boundaries
         sentences = re.split(r'([.!?]\s+)', text)
         
@@ -365,12 +411,18 @@ class AnswerFormatter:
             # (after 2-3 sentences or at natural breaks)
             sentence_count = len(re.findall(r'[.!?]', current_paragraph))
             
-            # Natural break points
-            if any(marker in sentence for marker in ['또한', '그리고', '하지만', '따라서', '즉,', '예를 들어']):
+            # Natural break points - more comprehensive list
+            natural_breaks = [
+                '또한', '그리고', '하지만', '따라서', '즉,', '예를 들어',
+                '첫째', '둘째', '셋째', '마지막으로', '결론적으로',
+                '특히', '반면', '그러나', '게다가', '아울러'
+            ]
+            
+            if any(marker in sentence for marker in natural_breaks):
                 if current_paragraph.strip():
                     result.append(current_paragraph.strip())
                     current_paragraph = ""
-            # Or after 2-3 sentences
+            # Or after 2 sentences for better readability
             elif sentence_count >= 2:
                 if current_paragraph.strip():
                     result.append(current_paragraph.strip())
@@ -380,8 +432,8 @@ class AnswerFormatter:
         if current_paragraph.strip():
             result.append(current_paragraph.strip())
         
-        # Join with double line breaks for paragraphs
-        return "\n\n".join(result)
+        # Join with single line break for better frontend handling
+        return "\n".join(result)
     
     def format_error_response(self, error: str, query: str) -> Dict:
         """Format error response"""
