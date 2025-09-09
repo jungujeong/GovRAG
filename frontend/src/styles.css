@@ -88,4 +88,89 @@
   .status-unhealthy {
     @apply bg-red-500;
   }
+  
+  /* Enhanced answer styling */
+  .answer-content {
+    @apply text-gray-800 leading-relaxed;
+  }
+  
+  .answer-content p {
+    @apply mb-4;
+  }
+  
+  .answer-content ul {
+    @apply list-disc list-inside space-y-2 my-4 pl-4;
+  }
+  
+  .answer-content ol {
+    @apply list-decimal list-inside space-y-2 my-4 pl-4;
+  }
+  
+  .answer-content li {
+    @apply text-gray-700;
+  }
+  
+  .answer-content strong {
+    @apply font-bold text-gray-900;
+  }
+  
+  .answer-content em {
+    @apply italic text-gray-700;
+  }
+  
+  .answer-content code {
+    @apply bg-gray-100 px-1 py-0.5 rounded text-sm font-mono;
+  }
+  
+  /* Answer sections */
+  .answer-section {
+    @apply relative pb-6 mb-6 border-b border-gray-200 last:border-0;
+  }
+  
+  .answer-header {
+    @apply flex items-center justify-between mb-3;
+  }
+  
+  .answer-title {
+    @apply text-xl font-semibold text-gray-900 flex items-center gap-2;
+  }
+  
+  /* Citation styling */
+  .citation-link {
+    @apply text-blue-600 font-medium hover:text-blue-700 hover:underline cursor-pointer transition-colors;
+  }
+  
+  /* Key facts styling */
+  .fact-item {
+    @apply flex items-start p-3 bg-gradient-to-r from-green-50 to-transparent rounded-lg border-l-4 border-green-500;
+  }
+  
+  .fact-marker {
+    @apply text-green-600 mr-3 flex-shrink-0;
+  }
+  
+  /* Copy button enhancement */
+  .copy-button {
+    @apply px-3 py-1 text-sm bg-white hover:bg-gray-50 border border-gray-300 rounded-md transition-all flex items-center gap-2 shadow-sm hover:shadow;
+  }
+  
+  .copy-button-success {
+    @apply bg-green-50 border-green-300 text-green-700;
+  }
+  
+  /* Citation preview animation */
+  @keyframes slide-up {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  .animate-slide-up {
+    animation: slide-up 0.3s ease-out;
+  }
 }
