@@ -1,0 +1,19 @@
+{
+  "session_id": "240455f1-a007-4b5f-8904-67492f1614dc",
+  "messages": [
+    {
+      "role": "user",
+      "content": "홍티예술촌에 대해 알려줘",
+      "timestamp": "2025-09-09T14:24:34.252Z",
+      "turnId": "1757427874252"
+    }
+  ],
+  "pending_request": {
+    "query": "홍티예술촌에 대해 알려줘",
+    "start_ts": "2025-09-09T14:24:34.252Z",
+    "partial_tokens": ""
+  },
+  "scroll_position": 0,
+  "last_saved": "2025-09-09T23:29:48.232635",
+  "partial_tokens": null
+}

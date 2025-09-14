@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "browser-server": {
+      "command": "mcp-server-browser"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@executeautomation/playwright-mcp-server"
+      ]
+    }
+  }
+}

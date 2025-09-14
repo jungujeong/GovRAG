@@ -92,21 +92,34 @@ async def process_query(request: QueryRequest) -> QueryResponse:
     """Process a RAG query"""
     try:
         logger.info(f"Processing query: {request.query[:100]}...")
-        
+
+        # Check for greeting or general queries
+        greetings = ["안녕", "hello", "hi", "도움", "help", "뭐해", "뭐하니", "안녕하세요"]
+        is_greeting = any(greeting in request.query.lower() for greeting in greetings)
+
+        if is_greeting:
+            return QueryResponse(
+                query=request.query,
+                answer="안녕하세요! 문서에 대해 궁금한 점이 있으시면 질문해 주세요.",
+                key_facts=[],
+                sources=[],  # No sources for greetings
+                metadata={"type": "greeting"}
+            )
+
         # 1. Retrieve relevant documents
         retriever = get_retriever()
         evidences = retriever.retrieve(
             request.query,
             limit=config.TOPK_BM25 + config.TOPK_VECTOR
         )
-        
+
         if not evidences:
             logger.warning("No evidences found")
             return QueryResponse(
                 query=request.query,
-                answer="관련 문서를 찾을 수 없습니다.",
+                answer="죄송합니다. 질문과 관련된 문서를 찾을 수 없습니다. 다른 질문을 해주시거나 문서를 먼저 업로드해 주세요.",
                 key_facts=[],
-                sources=[],
+                sources=[],  # No sources when no documents found
                 error="no_evidence"
             )
         
@@ -141,8 +154,25 @@ async def process_query(request: QueryRequest) -> QueryResponse:
         # 6. Format response
         formatter = get_formatter()
         response = formatter.format_response(response)
-        
-        # 7. Create final response
+
+        # 7. Check if response is generic or lacks evidence
+        answer_text = response.get("answer", "").lower()
+        generic_phrases = [
+            "죄송합니다", "찾을 수 없습니다", "모르겠습니다",
+            "정보가 없습니다", "알 수 없습니다", "근거가 부족합니다",
+            "문서에 없습니다", "확인할 수 없습니다", "판단하기 어렵습니다"
+        ]
+
+        is_generic = any(phrase in answer_text for phrase in generic_phrases)
+        has_low_confidence = response.get("verification", {}).get("confidence", 0) < 0.3
+        has_hallucination = response.get("verification", {}).get("hallucination_detected", False)
+
+        # Remove sources if response is generic or unreliable
+        if is_generic or has_low_confidence or has_hallucination:
+            response["sources"] = []
+            logger.info("Removed sources due to generic/unreliable response")
+
+        # 8. Create final response
         return QueryResponse(
             query=request.query,
             answer=response.get("answer", ""),

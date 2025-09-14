@@ -1,72 +1,80 @@
 import React from 'react'
+import '../styles/MediumDesign.css'
 
 function CitationPopup({ citation, onClose }) {
   if (!citation) return null
-  
+
   return (
-    <div 
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    <div
+      className="medium-modal-overlay"
       onClick={onClose}
     >
-      <div 
-        className="bg-white rounded-lg p-6 max-w-2xl max-h-[80vh] overflow-auto"
+      <div
+        className="medium-modal-container"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-start mb-4">
-          <h2 className="text-2xl font-bold">출처 상세 정보</h2>
+        <div className="medium-modal-header">
+          <h2 className="medium-modal-title">
+            📚 출처 상세 정보
+          </h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 text-2xl"
+            className="medium-modal-close"
             aria-label="닫기"
           >
             ✕
           </button>
         </div>
-        
-        <div className="space-y-4">
-          <div>
-            <h3 className="font-semibold text-lg mb-2">문서 정보</h3>
-            <dl className="grid grid-cols-2 gap-2 text-lg">
-              <dt className="text-gray-600">문서 ID:</dt>
-              <dd className="font-medium">{citation.doc_id}</dd>
-              
-              <dt className="text-gray-600">페이지:</dt>
-              <dd className="font-medium">{citation.page}</dd>
-              
-              {citation.chunk_id && (
-                <>
-                  <dt className="text-gray-600">청크 ID:</dt>
-                  <dd className="font-mono text-sm">{citation.chunk_id}</dd>
-                </>
-              )}
-            </dl>
-          </div>
-          
-          {(citation.start_char !== undefined || citation.end_char !== undefined) && (
-            <div>
-              <h3 className="font-semibold text-lg mb-2">위치 정보</h3>
-              <p className="text-lg">
-                문자 위치: {citation.start_char || 0} - {citation.end_char || 0}
-              </p>
-            </div>
-          )}
-          
-          {citation.text_snippet && (
-            <div>
-              <h3 className="font-semibold text-lg mb-2">인용 텍스트</h3>
-              <div className="p-4 bg-gray-50 rounded-lg border-l-4 border-blue-500">
-                <p className="text-lg leading-relaxed">
-                  {citation.text_snippet}
-                </p>
+
+        <div className="medium-modal-content">
+          <div className="medium-citation-info">
+            <div className="medium-info-section">
+              <h3 className="medium-info-title">문서 정보</h3>
+              <div className="medium-info-grid">
+                <div className="medium-info-item">
+                  <span className="medium-info-label">문서명:</span>
+                  <span className="medium-info-value">{citation.doc_id || citation.document}</span>
+                </div>
+                <div className="medium-info-item">
+                  <span className="medium-info-label">페이지:</span>
+                  <span className="medium-info-value">{citation.page || '-'}페이지</span>
+                </div>
+                {citation.chunk_id && (
+                  <div className="medium-info-item">
+                    <span className="medium-info-label">청크 ID:</span>
+                    <span className="medium-info-value">{citation.chunk_id}</span>
+                  </div>
+                )}
               </div>
             </div>
-          )}
+
+            {(citation.start_char !== undefined || citation.end_char !== undefined) && (
+              <div className="medium-info-section">
+                <h3 className="medium-info-title">위치 정보</h3>
+                <div className="medium-info-item">
+                  <span className="medium-info-label">문자 위치:</span>
+                  <span className="medium-info-value">
+                    {citation.start_char || citation.start || 0} - {citation.end_char || citation.end || 0}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {citation.text_snippet && (
+              <div className="medium-info-section">
+                <h3 className="medium-info-title">인용 텍스트</h3>
+                <div className="medium-citation-text">
+                  <p>{citation.text_snippet}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-        
-        <div className="mt-6 flex justify-end">
+
+        <div className="medium-modal-footer">
           <button
             onClick={onClose}
-            className="btn-primary"
+            className="medium-button medium-button-primary"
           >
             확인
           </button>

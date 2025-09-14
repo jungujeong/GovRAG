@@ -1,0 +1,335 @@
+/* Citation Popup Styles - Medium Design System */
+
+.citation-popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  animation: fadeIn 0.2s ease-out;
+  backdrop-filter: blur(4px);
+}
+
+.citation-popup-container {
+  background: var(--medium-white, #ffffff);
+  border-radius: 16px;
+  width: 90%;
+  max-width: 800px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.4);
+  animation: slideUp 0.3s ease-out;
+  overflow: hidden;
+}
+
+/* Header */
+.citation-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.75rem;
+  border-bottom: 2px solid #f0f0f0;
+  background: linear-gradient(to bottom, #ffffff, #fafafa);
+}
+
+.citation-popup-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  font-family: Georgia, serif;
+}
+
+.citation-icon {
+  font-size: 1.6rem;
+}
+
+.citation-popup-close {
+  background: none;
+  border: none;
+  font-size: 2.2rem;
+  color: #666;
+  cursor: pointer;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.citation-popup-close:hover {
+  background: #f0f0f0;
+  color: #1a1a1a;
+  transform: rotate(90deg);
+}
+
+/* Meta Information */
+.citation-popup-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  padding: 1.5rem;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.citation-meta-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.citation-meta-label {
+  font-size: 0.85rem;
+  color: #666;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.citation-meta-value {
+  font-size: 1rem;
+  color: #1a1a1a;
+  font-weight: 600;
+  font-family: Georgia, serif;
+}
+
+.citation-score {
+  color: var(--medium-accent, #1A8917);
+}
+
+/* Content */
+.citation-popup-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.citation-section {
+  margin-bottom: 2rem;
+}
+
+.citation-section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--medium-accent, #1A8917);
+  font-family: Georgia, serif;
+}
+
+/* Quoted Text */
+.citation-quoted-text {
+  background: linear-gradient(to right, #f0f8f0, #f8f9fa);
+  border-left: 4px solid var(--medium-accent, #1A8917);
+  padding: 1.25rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  line-height: 1.8;
+  color: #2c2c2c;
+  font-family: Georgia, serif;
+  position: relative;
+}
+
+.citation-quoted-text::before {
+  content: '"';
+  position: absolute;
+  top: -10px;
+  left: 10px;
+  font-size: 3rem;
+  color: var(--medium-accent, #1A8917);
+  opacity: 0.2;
+}
+
+/* Expand Section */
+.citation-expand-section {
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.citation-expand-button {
+  background: var(--medium-accent, #1A8917);
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 25px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 12px rgba(26, 137, 23, 0.3);
+}
+
+.citation-expand-button:hover {
+  background: #157814;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(26, 137, 23, 0.4);
+}
+
+/* Full Text */
+.citation-full-text {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 0.95rem;
+  line-height: 1.8;
+  color: #333;
+  font-family: Georgia, serif;
+}
+
+.citation-full-text::-webkit-scrollbar {
+  width: 8px;
+}
+
+.citation-full-text::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 10px;
+}
+
+.citation-full-text::-webkit-scrollbar-thumb {
+  background: #999;
+  border-radius: 10px;
+}
+
+.citation-full-text::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* Highlight */
+.citation-highlight {
+  background: #ffeb3b;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+/* Loading */
+.citation-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  gap: 1rem;
+}
+
+.citation-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #f0f0f0;
+  border-top-color: var(--medium-accent, #1A8917);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.citation-loading span {
+  color: #666;
+  font-size: 0.95rem;
+}
+
+/* No Data */
+.citation-no-data {
+  text-align: center;
+  padding: 2rem;
+  color: #999;
+  font-style: italic;
+}
+
+/* Footer */
+.citation-popup-footer {
+  padding: 1.5rem;
+  border-top: 1px solid #e0e0e0;
+  background: #fafafa;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.citation-action-button {
+  background: var(--medium-accent, #1A8917);
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.citation-action-button:hover {
+  background: #157814;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(26, 137, 23, 0.3);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .citation-popup-container {
+    width: 95%;
+    max-height: 90vh;
+    border-radius: 12px;
+  }
+  
+  .citation-popup-header {
+    padding: 1.25rem;
+  }
+  
+  .citation-popup-title {
+    font-size: 1.2rem;
+  }
+  
+  .citation-popup-meta {
+    grid-template-columns: 1fr;
+    padding: 1rem;
+  }
+  
+  .citation-popup-content {
+    padding: 1rem;
+  }
+  
+  .citation-full-text {
+    max-height: 300px;
+    padding: 1rem;
+  }
+}

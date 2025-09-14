@@ -240,6 +240,107 @@ class OllamaGenerator:
         
         return None
     
+    async def generate_with_context(self,
+                                   query: str,
+                                   evidences: List[Dict],
+                                   context: Optional[List[Dict]] = None,
+                                   stream: bool = False) -> Dict:
+        """Generate response with conversation context"""
+
+        # Format prompt with context
+        system_prompt = PromptTemplates.get_system_prompt(evidences)
+        user_prompt = PromptTemplates.format_user_prompt(query, evidences)
+
+        # Build message list with context
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation context if provided
+        if context:
+            for msg in context[-4:]:  # Keep last 4 messages for context
+                if msg.get("role") and msg.get("content"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Add current query
+        messages.append({"role": "user", "content": user_prompt})
+
+        # Prepare request
+        request_data = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+            "stream": stream
+        }
+
+        try:
+            if stream:
+                return await self._generate_stream(request_data)
+            else:
+                return await self._generate_sync(request_data)
+        except Exception as e:
+            logger.error(f"Generation with context failed: {e}")
+            raise
+
+    async def stream_with_context(self,
+                                 query: str,
+                                 evidences: List[Dict],
+                                 context: Optional[List[Dict]] = None,
+                                 cancel_event: Optional[asyncio.Event] = None) -> AsyncIterator[str]:
+        """Stream response with conversation context"""
+
+        # Format prompt with context
+        system_prompt = PromptTemplates.get_system_prompt(evidences)
+        user_prompt = PromptTemplates.format_user_prompt(query, evidences)
+
+        # Build message list with context
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation context if provided
+        if context:
+            for msg in context[-4:]:  # Keep last 4 messages for context
+                if msg.get("role") and msg.get("content"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Add current query
+        messages.append({"role": "user", "content": user_prompt})
+
+        # Prepare request
+        request_data = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+            "stream": True
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    'POST',
+                    f"{self.base_url}/api/chat",
+                    json=request_data
+                ) as response:
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        # Check cancellation
+                        if cancel_event and cancel_event.is_set():
+                            break
+
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                if data.get("message", {}).get("content"):
+                                    yield data["message"]["content"]
+                            except json.JSONDecodeError:
+                                continue
+
+        except Exception as e:
+            logger.error(f"Stream generation with context failed: {e}")
+            raise
+
     async def check_health(self) -> bool:
         """Check if Ollama is available"""
         try:

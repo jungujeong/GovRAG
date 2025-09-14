@@ -1,0 +1,202 @@
+/* 메시지 입력 영역 */
+.message-input-container {
+  border-top: 2px solid var(--border-color);
+  background: var(--bg-primary);
+  padding: var(--spacing-lg);
+}
+
+/* 메시지 폼 */
+.message-form {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: flex-end;
+}
+
+/* 입력 래퍼 */
+.input-wrapper {
+  flex: 1;
+  position: relative;
+}
+
+/* 메시지 입력 필드 */
+.message-input {
+  width: 100%;
+  min-height: 80px;
+  max-height: 200px;
+  padding: var(--spacing-md);
+  padding-bottom: 36px;
+  font-size: var(--font-base);
+  font-family: inherit;
+  line-height: 1.6;
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.message-input:focus {
+  border-color: var(--primary-color);
+  background: var(--bg-primary);
+}
+
+.message-input:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.message-input.near-limit {
+  border-color: var(--warning-color);
+}
+
+.message-input::placeholder {
+  color: var(--text-muted);
+  font-size: var(--font-base);
+}
+
+/* 문자 수 카운터 */
+.char-count {
+  position: absolute;
+  bottom: var(--spacing-sm);
+  right: var(--spacing-sm);
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.char-count.at-limit {
+  color: var(--danger-color);
+  font-weight: 600;
+}
+
+/* 입력 힌트 */
+.input-hints {
+  position: absolute;
+  bottom: var(--spacing-sm);
+  left: var(--spacing-md);
+  display: flex;
+  gap: var(--spacing-md);
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+
+.input-hints span {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.hint-generating {
+  color: var(--warning-color);
+  font-weight: 500;
+}
+
+/* 버튼 영역 */
+.input-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+/* 전송/중지 버튼 */
+.btn-send,
+.btn-stop {
+  min-height: 56px;
+  min-width: 120px;
+  font-size: var(--font-lg);
+  font-weight: 600;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s;
+}
+
+.btn-send svg,
+.btn-stop svg {
+  width: 20px;
+  height: 20px;
+}
+
+.btn-send:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #b91c1c;
+  transform: scale(1.05);
+}
+
+.btn-clear {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.btn-clear:hover {
+  background: var(--bg-secondary);
+}
+
+/* 생성 상태 표시 */
+.generation-status {
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-xs);
+}
+
+.status-bar {
+  height: 4px;
+  background: var(--bg-secondary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.status-progress {
+  height: 100%;
+  background: linear-gradient(90deg, 
+    var(--primary-color) 0%, 
+    var(--success-color) 50%, 
+    var(--primary-color) 100%);
+  background-size: 200% 100%;
+  animation: progress 2s linear infinite;
+}
+
+@keyframes progress {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 반응형 디자인 */
+@media (max-width: 768px) {
+  .message-input-container {
+    padding: var(--spacing-md);
+  }
+  
+  .message-form {
+    flex-direction: column;
+  }
+  
+  .input-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  
+  .btn-send,
+  .btn-stop {
+    flex: 1;
+  }
+  
+  .input-hints {
+    display: none;
+  }
+}

@@ -63,92 +63,117 @@ class CitationTracker:
         return citation_map
     
     def _add_inline_citations(self, text: str, evidences: List[Dict]) -> str:
-        """Add inline citation markers to text"""
-        
-        # Parse existing citations in text (e.g., "1.[1]", "2.[1]", "3.[2]")
-        # and map them to correct evidence indices
-        citation_pattern = r'(\d+\.)\[(\d+)\]'
-        
-        # Create a mapping of evidence content to index
-        evidence_map = {}
-        for idx, evidence in enumerate(evidences, 1):
-            evidence_text = evidence.get("text", "")
-            doc_id = evidence.get("doc_id", "")
-            page = evidence.get("page", 0)
-            
-            # Create unique key for this evidence
-            key = f"{doc_id}_{page}"
-            if key not in evidence_map:
-                evidence_map[key] = idx
-        
+        """Add inline citation markers to text - ensuring sequential numbering"""
+
+        # Track which evidences have been cited
+        cited_evidences = {}
+        next_citation_num = 1
+
         # Process text to fix citations
         lines = text.split('\n')
         fixed_lines = []
-        
+
         for line in lines:
             # Check if this line contains numbered items with citations
             if re.match(r'^\d+\.\[', line):
                 # Extract the content and find matching evidence
-                fixed_line = self._fix_line_citation(line, evidences, evidence_map)
+                fixed_line = self._fix_line_citation_sequential(line, evidences, cited_evidences, next_citation_num)
+                # Update next citation number if new citation was added
+                if fixed_line != line:
+                    # Check if a new citation was added
+                    match = re.search(r'\[(\d+)\]', fixed_line)
+                    if match:
+                        cite_num = int(match.group(1))
+                        if cite_num >= next_citation_num:
+                            next_citation_num = cite_num + 1
                 fixed_lines.append(fixed_line)
             else:
                 # For non-numbered lines, add citations based on content matching
-                fixed_line = self._add_citations_to_line(line, evidences)
+                fixed_line = self._add_citations_to_line_sequential(line, evidences, cited_evidences, next_citation_num)
+                # Update next citation number if new citation was added
+                if fixed_line != line:
+                    match = re.search(r'\[(\d+)\]', fixed_line)
+                    if match:
+                        cite_num = int(match.group(1))
+                        if cite_num >= next_citation_num:
+                            next_citation_num = cite_num + 1
                 fixed_lines.append(fixed_line)
-        
+
         return '\n'.join(fixed_lines)
     
-    def _fix_line_citation(self, line: str, evidences: List[Dict], evidence_map: Dict) -> str:
-        """Fix citation number in a numbered line"""
+    def _fix_line_citation_sequential(self, line: str, evidences: List[Dict], cited_evidences: Dict, next_num: int) -> str:
+        """Fix citation number in a numbered line with sequential numbering"""
         # Extract item number and content
         match = re.match(r'^(\d+)\.\[(\d+)\]\s*(.*)', line)
         if not match:
             return line
-        
+
         item_num = match.group(1)
         old_cite = match.group(2)
         content = match.group(3)
-        
+
         # Find the best matching evidence for this content
-        best_match_idx = None
+        best_match_evidence = None
         best_score = 0
-        
-        for idx, evidence in enumerate(evidences, 1):
+
+        for evidence in evidences:
             evidence_text = evidence.get("text", "")
             score = self._calculate_content_similarity(content, evidence_text)
-            
+
             if score > best_score:
                 best_score = score
-                best_match_idx = idx
-        
-        # If we found a good match, use that citation number
-        if best_match_idx and best_score > 0.3:
-            return f"{item_num}.[{best_match_idx}] {content}"
+                best_match_evidence = evidence
+
+        # If we found a good match, assign sequential citation number
+        if best_match_evidence and best_score > 0.3:
+            # Create unique key for this evidence
+            evidence_key = f"{best_match_evidence.get('doc_id', '')}_{best_match_evidence.get('page', 0)}_{best_match_evidence.get('chunk_id', '')}"
+
+            # Check if already cited
+            if evidence_key in cited_evidences:
+                cite_num = cited_evidences[evidence_key]
+            else:
+                # Assign new sequential number
+                cite_num = len(cited_evidences) + 1
+                cited_evidences[evidence_key] = cite_num
+
+            return f"{item_num}.[{cite_num}] {content}"
         else:
             # Keep original if no good match found
             return line
     
-    def _add_citations_to_line(self, line: str, evidences: List[Dict]) -> str:
-        """Add citations to a line based on content matching"""
+    def _add_citations_to_line_sequential(self, line: str, evidences: List[Dict], cited_evidences: Dict, next_num: int) -> str:
+        """Add citations to a line based on content matching with sequential numbering"""
         if not line.strip():
             return line
-        
+
         # Check which evidence this line matches
-        best_match_idx = None
+        best_match_evidence = None
         best_score = 0
-        
-        for idx, evidence in enumerate(evidences, 1):
+
+        for evidence in evidences:
             evidence_text = evidence.get("text", "")
             score = self._calculate_content_similarity(line, evidence_text)
-            
+
             if score > best_score:
                 best_score = score
-                best_match_idx = idx
-        
+                best_match_evidence = evidence
+
         # Add citation if good match found and not already present
-        if best_match_idx and best_score > 0.3 and not re.search(r'\[\d+\]', line):
-            return f"{line}[{best_match_idx}]"
-        
+        if best_match_evidence and best_score > 0.3 and not re.search(r'\[\d+\]', line):
+            # Create unique key for this evidence
+            evidence_key = f"{best_match_evidence.get('doc_id', '')}_{best_match_evidence.get('page', 0)}_{best_match_evidence.get('chunk_id', '')}"
+
+            # Check if already cited
+            if evidence_key in cited_evidences:
+                cite_num = cited_evidences[evidence_key]
+            else:
+                # Assign new sequential number
+                cite_num = len(cited_evidences) + 1
+                cited_evidences[evidence_key] = cite_num
+
+            return f"{line}[{cite_num}]"
+
         return line
     
     def _calculate_content_similarity(self, text1: str, text2: str) -> float:

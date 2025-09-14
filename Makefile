@@ -1,4 +1,4 @@
-.PHONY: install bundle index qa run clean setup validate index-backup index-restore index-verify index-repair index-list index-clean
+.PHONY: install bundle index qa run stop clean setup validate index-backup index-restore index-verify index-repair index-list index-clean
 
 install:
 	@echo "Installing dependencies..."
@@ -32,10 +32,26 @@ qa:
 
 run:
 	@echo "Starting RAG system..."
+	@# Ensure dev ports are free before starting
+	@if command -v lsof >/dev/null 2>&1; then \
+		if lsof -tiTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then \
+			echo "Error: Port 8000 is in use. Run 'make stop' or free the port."; \
+			exit 1; \
+		fi; \
+		if lsof -tiTCP:5173 -sTCP:LISTEN >/dev/null 2>&1; then \
+			echo "Error: Port 5173 is in use. Run 'make stop' or free the port."; \
+			exit 1; \
+		fi; \
+	fi
 	@trap 'kill %1 %2' SIGINT; \
 	(cd backend && PYTHONPATH=. uvicorn main:app --reload --port 8000) & \
 	(cd frontend && npm run dev) & \
 	wait
+
+stop:
+	@echo "Stopping RAG system..."
+	@bash ./stop.sh || true
+	@echo "Stopped."
 
 clean:
 	@echo "Cleaning up generated files..."

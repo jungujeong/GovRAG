@@ -30,11 +30,33 @@ async def upload_document(
     # Save file
     file_path = Path(config.DOC_DIR) / file.filename
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     try:
+        # Check if file already exists (for overwrite)
+        if file_path.exists():
+            logger.info(f"File {file.filename} already exists, will overwrite and re-index")
+            # Delete old index entries
+            from rag.whoosh_bm25 import WhooshBM25
+            from rag.chroma_store import ChromaStore
+            import unicodedata
+
+            doc_id = file_path.stem
+            doc_id_normalized = unicodedata.normalize("NFC", doc_id)
+
+            try:
+                whoosh = WhooshBM25()
+                whoosh_count = whoosh.delete_document(doc_id_normalized)
+
+                chroma = ChromaStore()
+                chroma_count = chroma.delete_document(doc_id_normalized)
+
+                logger.info(f"Deleted old index entries for {file.filename} (Whoosh: {whoosh_count}, Chroma: {chroma_count})")
+            except Exception as e:
+                logger.warning(f"Failed to delete old index entries: {e}")
+
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
+
         logger.info(f"Saved file: {file_path}")
         
         # Index synchronously for immediate result
@@ -82,12 +104,34 @@ async def upload_batch(
             # Save file
             file_path = Path(config.DOC_DIR) / file.filename
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
+            # Check if file already exists (for overwrite)
+            if file_path.exists():
+                logger.info(f"File {file.filename} already exists, will overwrite and re-index")
+                # Delete old index entries
+                from rag.whoosh_bm25 import WhooshBM25
+                from rag.chroma_store import ChromaStore
+                import unicodedata
+
+                doc_id = file_path.stem
+                doc_id_normalized = unicodedata.normalize("NFC", doc_id)
+
+                try:
+                    whoosh = WhooshBM25()
+                    whoosh_count = whoosh.delete_document(doc_id_normalized)
+
+                    chroma = ChromaStore()
+                    chroma_count = chroma.delete_document(doc_id_normalized)
+
+                    logger.info(f"Deleted old index entries for {file.filename} (Whoosh: {whoosh_count}, Chroma: {chroma_count})")
+                except Exception as e:
+                    logger.warning(f"Failed to delete old index entries: {e}")
+
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            
+
             uploaded.append(file.filename)
-            
+
             # Queue for indexing - use absolute path
             absolute_path = file_path.resolve()
             logger.info(f"Queuing for indexing: {absolute_path}")
@@ -291,6 +335,100 @@ async def get_document_stats() -> Dict:
         "whoosh": whoosh.get_stats(),
         "chroma": chroma.get_stats()
     }
+
+@router.post("/process")
+async def process_document(
+    background_tasks: BackgroundTasks,
+    filename: str = None
+) -> Dict:
+    """Process a specific document for indexing"""
+
+    file_path = Path(config.DOC_DIR) / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Queue for indexing
+    absolute_path = file_path.resolve()
+    logger.info(f"Processing document: {absolute_path}")
+    background_tasks.add_task(indexer.index_document_sync, absolute_path)
+
+    return {
+        "status": "processing",
+        "filename": filename,
+        "message": "Document processing started"
+    }
+
+@router.get("/{filename}/details")
+async def get_document_details(filename: str) -> Dict:
+    """Get detailed information about a specific document"""
+
+    from rag.whoosh_bm25 import WhooshBM25
+    from rag.chroma_store import ChromaStore
+    import unicodedata
+
+    # Check if file exists
+    file_path = Path(config.DOC_DIR) / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Get basic file info
+    doc_info = {
+        "filename": file_path.name,
+        "path": str(file_path),
+        "size": file_path.stat().st_size,
+        "size_mb": round(file_path.stat().st_size / (1024 * 1024), 2),
+        "modified": file_path.stat().st_mtime,
+        "type": file_path.suffix[1:].upper(),
+        "chunks": [],
+        "stats": {}
+    }
+
+    # Get document ID (filename without extension)
+    doc_id = file_path.stem
+    doc_id_normalized = unicodedata.normalize("NFC", doc_id)
+
+    try:
+        # Get Whoosh chunk count
+        whoosh = WhooshBM25()
+        with whoosh.index.searcher() as searcher:
+            whoosh_chunks = 0
+            for docnum in range(searcher.doc_count_all()):
+                stored = searcher.stored_fields(docnum)
+                stored_doc_id = unicodedata.normalize("NFC", stored.get("doc_id", ""))
+                if stored_doc_id == doc_id_normalized:
+                    whoosh_chunks += 1
+
+        # Get ChromaDB chunk count
+        chroma = ChromaStore()
+        chroma_results = chroma.collection.get(
+            where={"doc_id": doc_id_normalized}
+        )
+        chroma_chunks = len(chroma_results['ids']) if chroma_results and 'ids' in chroma_results else 0
+
+        # Check for directive file
+        directive_file = file_path.parent / f"{file_path.stem}_directive.jsonl"
+        has_directives = directive_file.exists()
+
+        # Check for processed files
+        processed_file = file_path.parent / f"{file_path.stem}_processed.txt"
+
+        doc_info["stats"] = {
+            "whoosh_chunks": whoosh_chunks,
+            "chroma_chunks": chroma_chunks,
+            "has_directives": has_directives,
+            "status": "indexed" if (whoosh_chunks > 0 or chroma_chunks > 0) else "pending",
+            "processed": processed_file.exists()
+        }
+
+    except Exception as e:
+        logger.warning(f"Could not get full stats: {e}")
+        doc_info["stats"] = {
+            "whoosh_chunks": 0,
+            "chroma_chunks": 0,
+            "has_directives": False
+        }
+
+    return doc_info
 
 @router.get("/detail/{filename}")
 async def get_document_detail(filename: str) -> Dict:

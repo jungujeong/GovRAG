@@ -1,0 +1,353 @@
+/* ===========================
+   40-50대 친화적 디자인 시스템
+   =========================== */
+
+:root {
+  /* 색상 - 고대비, 명확한 색상 */
+  --primary-color: #2563eb;      /* 파란색 - 링크, 주요 버튼 */
+  --secondary-color: #64748b;    /* 회색 - 보조 텍스트 */
+  --success-color: #16a34a;      /* 녹색 - 완료, 성공 */
+  --danger-color: #dc2626;       /* 빨간색 - 오류, 삭제 */
+  --warning-color: #ea580c;      /* 주황색 - 경고 */
+  
+  --bg-primary: #ffffff;         /* 흰색 배경 */
+  --bg-secondary: #f8fafc;       /* 연한 회색 배경 */
+  --bg-sidebar: #f1f5f9;         /* 사이드바 배경 */
+  
+  --text-primary: #1e293b;       /* 진한 텍스트 */
+  --text-secondary: #475569;     /* 보조 텍스트 */
+  --text-muted: #94a3b8;         /* 희미한 텍스트 */
+  
+  --border-color: #e2e8f0;       /* 테두리 색상 */
+  --border-hover: #cbd5e1;       /* 호버 테두리 */
+  
+  /* 폰트 크기 - 큰 사이즈 */
+  --font-xs: 14px;
+  --font-sm: 16px;
+  --font-base: 18px;
+  --font-lg: 20px;
+  --font-xl: 24px;
+  --font-2xl: 28px;
+  
+  /* 간격 - 넉넉한 여백 */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  /* 버튼 크기 - 클릭하기 쉬운 크기 */
+  --btn-height: 48px;
+  --btn-min-width: 100px;
+  
+  /* 그림자 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* 전역 스타일 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: var(--font-base);
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 앱 컨테이너 */
+.app-container {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 메인 콘텐츠 영역 */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  min-width: 0;
+}
+
+/* 채팅 헤더 */
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-lg);
+  border-bottom: 2px solid var(--border-color);
+  background: var(--bg-primary);
+  min-height: 80px;
+}
+
+.chat-title {
+  font-size: var(--font-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.chat-title:hover {
+  background: var(--bg-secondary);
+}
+
+.title-edit {
+  flex: 1;
+}
+
+.title-input {
+  width: 100%;
+  max-width: 500px;
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-lg);
+  border: 2px solid var(--primary-color);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg-primary);
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.status-saving {
+  color: var(--warning-color);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.status-saved {
+  color: var(--success-color);
+}
+
+/* 토스트 알림 */
+.toast {
+  position: fixed;
+  top: var(--spacing-lg);
+  right: var(--spacing-lg);
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--bg-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  font-size: var(--font-base);
+  z-index: 1000;
+  animation: slideIn 0.3s ease;
+  max-width: 500px;
+}
+
+.toast-error {
+  border-left: 4px solid var(--danger-color);
+  color: var(--danger-color);
+}
+
+.toast-info {
+  border-left: 4px solid var(--primary-color);
+  color: var(--text-primary);
+}
+
+.toast button {
+  background: none;
+  border: none;
+  font-size: var(--font-lg);
+  cursor: pointer;
+  padding: var(--spacing-xs);
+  color: var(--text-secondary);
+  transition: color 0.2s;
+}
+
+.toast button:hover {
+  color: var(--text-primary);
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* 버튼 스타일 */
+.btn {
+  min-height: var(--btn-height);
+  min-width: var(--btn-min-width);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-size: var(--font-base);
+  font-weight: 500;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--primary-color);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 2px solid var(--border-color);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-primary);
+  border-color: var(--border-hover);
+}
+
+.btn-danger {
+  background: var(--danger-color);
+  color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.btn-send {
+  background: var(--primary-color);
+  color: white;
+}
+
+.btn-stop {
+  background: var(--danger-color);
+  color: white;
+}
+
+.btn-clear {
+  background: transparent;
+  color: var(--text-secondary);
+  min-width: auto;
+  padding: var(--spacing-sm);
+}
+
+/* 링크 버튼 */
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--primary-color);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: var(--font-base);
+  padding: var(--spacing-xs);
+}
+
+.link-btn:hover {
+  color: #1d4ed8;
+}
+
+/* 반응형 디자인 */
+@media (max-width: 768px) {
+  :root {
+    --font-base: 16px;
+    --font-lg: 18px;
+    --font-xl: 20px;
+  }
+  
+  .app-container {
+    flex-direction: column;
+  }
+  
+  .sidebar {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    position: relative;
+  }
+  
+  .chat-header {
+    padding: var(--spacing-md);
+  }
+  
+  .toast {
+    right: var(--spacing-sm);
+    left: var(--spacing-sm);
+    max-width: calc(100% - var(--spacing-lg));
+  }
+}
+
+/* 다크모드 지원 (선택적) */
+@media (prefers-color-scheme: dark) {
+  /* 다크모드 색상은 나중에 추가 가능 */
+}
+
+/* 애니메이션 */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 접근성 개선 */
+:focus-visible {
+  outline: 3px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* 스크롤바 스타일 */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}

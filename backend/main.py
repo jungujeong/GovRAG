@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 from config import config
-from routers import query, admin, documents
+from routers import query, admin, documents, chat
 from utils.log_utils import setup_logging
 
 # Setup logging
@@ -54,6 +54,7 @@ app.add_middleware(
 app.include_router(query.router, prefix="/api/query", tags=["Query"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 
 @app.get("/")
 async def root():

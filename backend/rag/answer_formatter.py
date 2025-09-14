@@ -57,7 +57,7 @@ class AnswerFormatter:
         """Clean text to keep only Korean and necessary characters"""
         if not text:
             return text
-        
+
         # Filter to keep only Korean, ASCII, and common punctuation
         cleaned_chars = []
         for char in text:
@@ -78,15 +78,15 @@ class AnswerFormatter:
             # Replace other characters with space
             else:
                 cleaned_chars.append(' ')
-        
+
         result = ''.join(cleaned_chars)
-        
+
         # Clean up multiple spaces
         result = re.sub(r'\s+', ' ', result)
-        
+
         # Ensure department names are properly formatted (comma-separated)
         result = re.sub(r'([가-힣]+과)\s+([가-힣]+과)', r'\1, \2', result)
-        
+
         return result.strip()
     
     def _format_as_text(self, response: Dict) -> str:
@@ -388,52 +388,74 @@ class AnswerFormatter:
         """Add natural line breaks for better readability"""
         if not text:
             return text
-        
+
         # First preserve existing line breaks if they exist
-        if '\n' in text:
+        if '\n\n' in text:
             # Keep existing formatting
             return text
-        
+
+        # Replace single line breaks with double for better spacing
+        if '\n' in text:
+            text = text.replace('\n', '\n\n')
+
         # Split long paragraphs at sentence boundaries
         sentences = re.split(r'([.!?]\s+)', text)
-        
+
         result = []
         current_paragraph = ""
-        
+        sentence_count = 0
+
         for i in range(0, len(sentences), 2):
             sentence = sentences[i]
             separator = sentences[i + 1] if i + 1 < len(sentences) else ""
-            
+
             # Add sentence to current paragraph
             current_paragraph += sentence + separator
-            
-            # Check if we should start a new paragraph
-            # (after 2-3 sentences or at natural breaks)
-            sentence_count = len(re.findall(r'[.!?]', current_paragraph))
-            
-            # Natural break points - more comprehensive list
+            sentence_count += 1
+
+            # Natural break points - comprehensive list
             natural_breaks = [
                 '또한', '그리고', '하지만', '따라서', '즉,', '예를 들어',
-                '첫째', '둘째', '셋째', '마지막으로', '결론적으로',
-                '특히', '반면', '그러나', '게다가', '아울러'
+                '첫째', '둘째', '셋째', '넷째', '다섯째',
+                '마지막으로', '결론적으로', '요약하면',
+                '특히', '반면', '그러나', '게다가', '아울러',
+                '한편', '다만', '단,', '참고로', '추가로',
+                '이와 관련하여', '이에 따라', '그 결과',
+                '구체적으로', '세부적으로', '종합하면'
             ]
-            
-            if any(marker in sentence for marker in natural_breaks):
-                if current_paragraph.strip():
-                    result.append(current_paragraph.strip())
-                    current_paragraph = ""
-            # Or after 2 sentences for better readability
-            elif sentence_count >= 2:
-                if current_paragraph.strip():
-                    result.append(current_paragraph.strip())
-                    current_paragraph = ""
-        
+
+            # Check if we should start a new paragraph
+            should_break = False
+
+            # Break at natural transition points
+            for marker in natural_breaks:
+                if sentence.startswith(marker) or f' {marker}' in sentence:
+                    should_break = True
+                    break
+
+            # Break after 1-2 sentences for readability
+            if not should_break and sentence_count >= 2:
+                should_break = True
+
+            # Break at numbered items
+            if re.match(r'^\d+[.)]\s', sentence):
+                should_break = True
+
+            # Break at bullet points
+            if sentence.strip().startswith(('•', '-', '*', '○', '●')):
+                should_break = True
+
+            if should_break and current_paragraph.strip():
+                result.append(current_paragraph.strip())
+                current_paragraph = ""
+                sentence_count = 0
+
         # Add remaining content
         if current_paragraph.strip():
             result.append(current_paragraph.strip())
-        
-        # Join with single line break for better frontend handling
-        return "\n".join(result)
+
+        # Join with double line break for better spacing
+        return "\n\n".join(result)
     
     def format_error_response(self, error: str, query: str) -> Dict:
         """Format error response"""
