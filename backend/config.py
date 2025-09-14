@@ -14,6 +14,7 @@ class Config:
     
     # Document/Index
     BASE_DIR = Path(__file__).parent.parent  # Get project root
+    DATA_DIR: Path = BASE_DIR / "data"  # Add DATA_DIR for session manager
     DOC_DIR: Path = Path(os.getenv("DOC_DIR", str(BASE_DIR / "data" / "documents")))
     WHOOSH_DIR: Path = Path(os.getenv("WHOOSH_DIR", str(BASE_DIR / "data" / "index")))
     CHROMA_DIR: Path = Path(os.getenv("CHROMA_DIR", str(BASE_DIR / "data" / "chroma")))

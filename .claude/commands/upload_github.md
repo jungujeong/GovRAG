@@ -11,7 +11,7 @@ github에 파일 올리기
 1. commit, Issue, PR 등에서는 반드시 CLAUDE 관련된 태그를 함께하면 안됩니다. commit 포함
 2. commit title은 반드시 영어, 설명은 영어로 해야합니다.
 3. Issue와 PR의 title은 반드시 한국어, 설명도 한국어로 해야합니다.
-4. 지금까지 작업한 내용을 종합하여 github에 올리기
+4. 최근 commit과 비교하여 지금까지 작업한 내용을 종합하여 github에 Issu, PR 내용 올리기
 
 Issue 양식:
 ### 📌 작업 개요

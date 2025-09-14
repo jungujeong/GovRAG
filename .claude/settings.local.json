@@ -39,9 +39,26 @@
       "Bash(pkill:*)",
       "Bash(npm install)",
       "Bash(lsof:*)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(timeout:*)",
+      "Bash(xargs kill:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npx vite:*)",
+      "Bash(npm run build:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Read(//Users/yummongi/.nvm/**)",
+      "Bash(nvm install:*)",
+      "Bash(nvm use:*)",
+      "Bash(awk:*)",
+      "Bash(PYTHONPATH=. uvicorn main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(ollama list:*)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "browser-server",
+    "playwright"
+  ]
 }

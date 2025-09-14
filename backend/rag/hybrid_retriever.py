@@ -3,6 +3,7 @@ import numpy as np
 from collections import defaultdict
 import logging
 import re
+import unicodedata
 from rapidfuzz import fuzz
 
 from config import config
@@ -30,33 +31,51 @@ class HybridRetriever:
         self.w_vector = config.W_VECTOR
         self.w_rerank = config.W_RERANK
     
-    def retrieve(self, query: str, limit: int = 10) -> List[Dict]:
-        """Retrieve documents using hybrid search"""
+    def retrieve(self, query: str, limit: int = 10, document_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Retrieve documents using hybrid search with optional document filtering"""
         # Normalize query
         normalized_query = self.normalizer.normalize_query(query)
-        
+
         # BM25 search
-        bm25_results = self._bm25_search(normalized_query)
-        
+        bm25_results = self._bm25_search(normalized_query, document_ids)
+
         # Vector search
-        vector_results = self._vector_search(query)  # Use original query for embedding
-        
+        vector_results = self._vector_search(query, document_ids)  # Use original query for embedding
+
         # Combine with RRF
         combined_results = self._reciprocal_rank_fusion(
             bm25_results,
             vector_results
         )
-        
+
         # Filter by relevance
         filtered_results = self._filter_by_relevance(query, combined_results)
-        
+
         # Return top results
         return filtered_results[:limit]
     
-    def _bm25_search(self, query: str) -> List[Dict]:
-        """Perform BM25 search"""
+    def _bm25_search(self, query: str, document_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Perform BM25 search with optional document filtering"""
         try:
             results = self.bm25.search(query, limit=config.TOPK_BM25)
+
+            # Filter by document IDs if provided
+            if document_ids:
+                # Normalize Unicode for comparison (handle NFD vs NFC)
+                normalized_doc_ids = set(unicodedata.normalize('NFC', doc_id) for doc_id in document_ids)
+
+                # Log for debugging
+                logger.debug(f"Filter doc IDs (normalized): {normalized_doc_ids}")
+                logger.debug(f"First 3 result doc IDs: {[r.get('doc_id', '') for r in results[:3]]}")
+
+                filtered_results = []
+                for r in results:
+                    result_doc_id = unicodedata.normalize('NFC', r.get("doc_id", ""))
+                    if result_doc_id in normalized_doc_ids:
+                        filtered_results.append(r)
+
+                logger.info(f"BM25 filtering: {len(results)} -> {len(filtered_results)} results")
+                results = filtered_results
             
             # Normalize BM25 scores
             if results:
@@ -75,17 +94,31 @@ class HybridRetriever:
             logger.error(f"BM25 search failed: {e}")
             return []
     
-    def _vector_search(self, query: str) -> List[Dict]:
-        """Perform vector similarity search"""
+    def _vector_search(self, query: str, document_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Perform vector similarity search with optional document filtering"""
         try:
             # Generate query embedding
             query_embedding = self.embedder.encode_query(query)
-            
+
             # Search in ChromaDB
             results = self.chroma.search(
                 query_embedding.tolist(),
-                limit=config.TOPK_VECTOR
+                limit=config.TOPK_VECTOR if not document_ids else config.TOPK_VECTOR * 2
             )
+
+            # Filter by document IDs if provided
+            if document_ids:
+                # Normalize Unicode for comparison (handle NFD vs NFC)
+                normalized_doc_ids = set(unicodedata.normalize('NFC', doc_id) for doc_id in document_ids)
+
+                filtered_results = []
+                for r in results:
+                    result_doc_id = unicodedata.normalize('NFC', r.get("doc_id", ""))
+                    if result_doc_id in normalized_doc_ids:
+                        filtered_results.append(r)
+
+                logger.info(f"Vector filtering: {len(results)} -> {len(filtered_results)} results")
+                results = filtered_results[:config.TOPK_VECTOR]
             
             # Scores from ChromaDB are already normalized (cosine similarity)
             for r in results:
@@ -185,44 +218,48 @@ class HybridRetriever:
         
         return results[:limit]
     
-    def _filter_by_relevance(self, query: str, results: List[Dict], 
-                           min_score: float = 0.05, 
-                           keyword_threshold: float = 0.15) -> List[Dict]:
+    def _filter_by_relevance(self, query: str, results: List[Dict],
+                           min_score: float = 0.01,  # Lower threshold
+                           keyword_threshold: float = 0.05) -> List[Dict]:  # Lower threshold
         """Filter results by relevance using multiple criteria with fallback"""
         if not results:
             logger.warning("No results to filter")
             return []
-        
+
         logger.info(f"Starting relevance filtering with {len(results)} results")
-        
+
         # Extract query keywords
         query_keywords = self._extract_keywords(query)
         logger.info(f"Extracted keywords: {query_keywords}")
-        
+
         filtered_results = []
         debug_info = []
-        
+
         for i, result in enumerate(results):
             rrf_score = result.get("rrf_score", 0)
             text = result.get("text", "")
-            
+
             if not text:
                 debug_info.append(f"Result {i}: No text content")
                 continue
-            
+
             # Calculate keyword relevance
             keyword_relevance = self._calculate_keyword_relevance(query_keywords, text)
             result["keyword_relevance"] = keyword_relevance
-            
-            # More permissive filtering criteria
+
+            # More permissive filtering criteria - balanced approach
             include_reason = None
-            if keyword_relevance >= keyword_threshold:
-                include_reason = f"keyword_rel={keyword_relevance:.3f} >= {keyword_threshold}"
-            elif rrf_score >= 0.5:  # Lowered from 0.7
-                include_reason = f"high_semantic={rrf_score:.3f} >= 0.5"
-            elif rrf_score >= min_score and keyword_relevance >= 0.1:  # More lenient fallback
-                include_reason = f"moderate_match rrf={rrf_score:.3f}, kw={keyword_relevance:.3f}"
-            
+            if keyword_relevance >= 0.1:  # Strong keyword match
+                include_reason = f"strong_keyword={keyword_relevance:.3f}"
+            elif keyword_relevance >= keyword_threshold:  # Moderate keyword match
+                include_reason = f"moderate_keyword={keyword_relevance:.3f}"
+            elif rrf_score >= 0.1:  # Strong semantic match
+                include_reason = f"strong_semantic={rrf_score:.3f}"
+            elif rrf_score >= min_score:  # Weak semantic match
+                include_reason = f"weak_semantic={rrf_score:.3f}"
+            elif keyword_relevance > 0:  # Any keyword match
+                include_reason = f"any_keyword={keyword_relevance:.3f}"
+
             if include_reason:
                 filtered_results.append(result)
                 debug_info.append(f"Result {i}: INCLUDED - {include_reason}")
