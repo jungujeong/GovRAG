@@ -100,8 +100,14 @@ class SessionManager:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             document_ids=data.get("document_ids", []),
+            conversation_summary=data.get("conversation_summary"),
+            recent_entities=data.get("recent_entities", []),
+            recent_source_doc_ids=data.get("recent_source_doc_ids", []),
+            memory_facts=data.get("memory_facts", []),
             is_active=data.get("is_active", True),
-            metadata=data.get("metadata")
+            metadata=data.get("metadata"),
+            first_response_evidences=data.get("first_response_evidences"),
+            first_response_citation_map=data.get("first_response_citation_map")
         )
         
         for msg_data in data.get("messages", []):
@@ -130,7 +136,11 @@ class SessionManager:
                 document_ids=document_ids or []
             )
             self.active_sessions[session.id] = session
-            
+            if document_ids is None:
+                session.document_ids = []
+
+            if title:
+                session.title = title
             # 저장 큐에 추가
             await self._save_queue.put(session.id)
             
@@ -145,7 +155,13 @@ class SessionManager:
         self,
         session_id: str,
         title: Optional[str] = None,
-        document_ids: Optional[List[str]] = None
+        document_ids: Optional[List[str]] = None,
+        conversation_summary: Optional[str] = None,
+        recent_entities: Optional[List[str]] = None,
+        recent_source_doc_ids: Optional[List[str]] = None,
+        first_response_evidences: Optional[List[Dict[str, Any]]] = None,
+        first_response_citation_map: Optional[Dict[str, int]] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[ChatSession]:
         """세션 업데이트"""
         async with self._lock:
@@ -157,7 +173,19 @@ class SessionManager:
                 session.title = title
             if document_ids is not None:
                 session.document_ids = document_ids
-            
+            if conversation_summary is not None:
+                session.conversation_summary = conversation_summary
+            if recent_entities is not None:
+                session.recent_entities = recent_entities
+            if recent_source_doc_ids is not None:
+                session.recent_source_doc_ids = recent_source_doc_ids
+            if first_response_evidences is not None:
+                session.first_response_evidences = first_response_evidences
+            if first_response_citation_map is not None:
+                session.first_response_citation_map = first_response_citation_map
+            if metadata is not None:
+                session.metadata = metadata
+
             session.updated_at = datetime.now()
             
             # 저장 큐에 추가
@@ -244,11 +272,32 @@ class SessionManager:
                 return None
             
             message = session.add_message(role, content, sources, error, metadata)
+
+            if role == "user" and not session.conversation_summary:
+                session.conversation_summary = content
             
             # 저장 큐에 추가
             await self._save_queue.put(session_id)
             
             return message
+
+    async def add_memory_facts(
+        self,
+        session_id: str,
+        facts: List[Dict[str, str]]
+    ) -> bool:
+        """세션에 메모리 팩트 추가"""
+        if not facts:
+            return False
+
+        async with self._lock:
+            session = self.active_sessions.get(session_id)
+            if not session:
+                return False
+
+            session.add_memory_facts(facts)
+            await self._save_queue.put(session_id)
+            return True
     
     async def get_session_context(
         self,

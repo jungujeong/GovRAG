@@ -59,6 +59,12 @@ class Config:
     SESSION_TIMEOUT_S: int = int(os.getenv("SESSION_TIMEOUT_S", "3600"))
     AUDIT_LOG_RETENTION_D: int = int(os.getenv("AUDIT_LOG_RETENTION_D", "90"))
     PII_MASKING: bool = os.getenv("PII_MASKING", "true").lower() == "true"
+
+    # Topic Change Detection
+    TOPIC_SIMILARITY_THRESHOLD: float = float(os.getenv("TOPIC_SIMILARITY_THRESHOLD", "0.3"))
+    TOPIC_CONFIDENCE_THRESHOLD: float = float(os.getenv("TOPIC_CONFIDENCE_THRESHOLD", "0.15"))  # More sensitive
+    TOPIC_MIN_SCORE_THRESHOLD: float = float(os.getenv("TOPIC_MIN_SCORE_THRESHOLD", "0.05"))  # More sensitive
+    TOPIC_DETECTION_ENABLED: bool = os.getenv("TOPIC_DETECTION_ENABLED", "true").lower() == "true"
     
     @classmethod
     def validate(cls):

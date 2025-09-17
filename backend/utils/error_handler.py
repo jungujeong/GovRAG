@@ -175,7 +175,11 @@ class ErrorHandler:
     def handle_rag_error(self, error: Exception) -> str:
         """RAG 시스템 에러 처리"""
         error_str = str(error).lower()
-        
+
+        # 에러 로깅 추가
+        logger.error(f"RAG Error Type: {type(error).__name__}")
+        logger.error(f"RAG Error Message: {error_str}")
+
         if "ollama" in error_str:
             return "AI 모델에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."
         elif "embedding" in error_str:
@@ -186,8 +190,11 @@ class ErrorHandler:
             return "답변 생성 중 오류가 발생했습니다. 다시 시도해 주세요."
         elif "no evidence" in error_str or "no document" in error_str:
             return "업로드된 문서에서 관련 정보를 찾을 수 없습니다."
+        elif "hallucination" in error_str:
+            return "정확한 답변을 생성할 수 없습니다. 질문을 다시 입력해 주세요."
         else:
-            return "답변 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+            # 기본 메시지 대신 구체적인 에러 정보 포함
+            return f"응답 생성 중 오류가 발생했습니다: {error_str[:100]}"
     
     def get_error_stats(self) -> Dict[str, Any]:
         """에러 통계 반환"""
