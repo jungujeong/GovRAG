@@ -9,6 +9,7 @@ class QueryRequest(BaseModel):
     doc_types: Optional[List[str]] = Field(None, description="Filter by document types")
     limit: int = Field(10, ge=1, le=50, description="Maximum results to return")
     stream: bool = Field(False, description="Enable streaming response")
+    reset_context: bool = Field(False, description="Reset conversation context for new topic")
 
 class Citation(BaseModel):
     """Citation information"""

@@ -103,7 +103,8 @@ class ChatAPI {
     let buffer = ''
     let finalResponse = {
       answer: '',
-      sources: []
+      sources: [],
+      metadata: {}
     }
     
     try {
@@ -133,8 +134,12 @@ class ChatAPI {
                 finalResponse.answer += data.content
                 onStream(data.content)
               } else if (data.complete) {
-                // Completion with sources
+                // Completion with final answer and sources
+                if (typeof data.answer === 'string') {
+                  finalResponse.answer = data.answer
+                }
                 finalResponse.sources = data.sources || []
+                finalResponse.metadata = data.metadata || {}
               }
             } catch (e) {
               console.error('Failed to parse streaming data:', e)

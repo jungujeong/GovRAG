@@ -16,11 +16,15 @@ class AnswerFormatter:
             "sources": "📚 출처"
         }
     
-    def format_response(self, response: Dict) -> Dict:
+    def format_response(self, response: Dict, allowed_doc_ids: Optional[List[str]] = None) -> Dict:
         """Format response according to schema"""
-        
+
         # Clean up response content first
         response = self._clean_response_content(response)
+
+        # Remove invalid source references from answer text if allowed_doc_ids is provided
+        if allowed_doc_ids:
+            response = self._remove_invalid_source_refs(response, allowed_doc_ids)
         
         # Filter sources to only include those cited in the answer
         response = self._filter_cited_sources(response)
@@ -230,6 +234,59 @@ class AnswerFormatter:
         
         return json.dumps(json_data, ensure_ascii=False, indent=2)
     
+    def _remove_invalid_source_refs(self, response: Dict, allowed_doc_ids: List[str]) -> Dict:
+        """Remove invalid source references from answer text"""
+        answer = response.get("answer", "")
+        key_facts = response.get("key_facts", [])
+        details = response.get("details", "")
+        sources = response.get("sources", [])
+
+        # Get valid citation numbers
+        valid_citations = set()
+        for idx, source in enumerate(sources, 1):
+            if source.get("doc_id") in allowed_doc_ids:
+                valid_citations.add(str(idx))
+
+        # Remove invalid citations from answer
+        answer = self._clean_invalid_citations(answer, valid_citations)
+        response["answer"] = answer
+
+        # Clean key facts
+        cleaned_facts = []
+        for fact in key_facts:
+            cleaned_fact = self._clean_invalid_citations(fact, valid_citations)
+            if cleaned_fact:  # Only keep non-empty facts
+                cleaned_facts.append(cleaned_fact)
+        response["key_facts"] = cleaned_facts
+
+        # Clean details
+        if details:
+            response["details"] = self._clean_invalid_citations(details, valid_citations)
+
+        return response
+
+    def _clean_invalid_citations(self, text: str, valid_citations: set) -> str:
+        """Remove invalid citation numbers from text"""
+        if not text:
+            return text
+
+        # Find all citations in format [N]
+        def replace_citation(match):
+            citation_num = match.group(1)
+            if citation_num in valid_citations:
+                return match.group(0)  # Keep valid citation
+            else:
+                logger.warning(f"Removing invalid citation [{citation_num}] from text")
+                return ""  # Remove invalid citation
+
+        # Replace invalid citations
+        cleaned_text = re.sub(r'\[(\d+)\]', replace_citation, text)
+
+        # Clean up extra spaces
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+
+        return cleaned_text
+
     def _filter_cited_sources(self, response: Dict) -> Dict:
         """Keep all sources but mark which ones are cited, preserving original numbering"""
         answer_text = response.get("answer", "")

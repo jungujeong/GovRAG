@@ -247,21 +247,19 @@ class OllamaGenerator:
                                    stream: bool = False) -> Dict:
         """Generate response with conversation context"""
 
-        # Format prompt with context
+        # 항상 컨텍스트를 포함하여 LLM이 질문 유형을 판단하도록 함
+        query_lower = query.lower()
+
+        # Format prompt with context - 항상 컨텍스트 포함
         system_prompt = PromptTemplates.get_system_prompt(evidences)
-        user_prompt = PromptTemplates.format_user_prompt(query, evidences)
+        user_prompt = PromptTemplates.format_user_prompt(query, evidences, context, is_meta_query=False)
 
-        # Build message list with context
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # Add conversation context if provided
-        if context:
-            for msg in context[-4:]:  # Keep last 4 messages for context
-                if msg.get("role") and msg.get("content"):
-                    messages.append({"role": msg["role"], "content": msg["content"]})
-
-        # Add current query
-        messages.append({"role": "user", "content": user_prompt})
+        # Build message list - 시스템 프롬프트와 사용자 프롬프트만 사용
+        # 컨텍스트는 user_prompt에 이미 포함되어 있음
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
 
         # Prepare request
         request_data = {
@@ -277,7 +275,7 @@ class OllamaGenerator:
             if stream:
                 return await self._generate_stream(request_data)
             else:
-                return await self._generate_sync(request_data)
+                return await self._generate_complete(request_data)
         except Exception as e:
             logger.error(f"Generation with context failed: {e}")
             raise
@@ -289,21 +287,19 @@ class OllamaGenerator:
                                  cancel_event: Optional[asyncio.Event] = None) -> AsyncIterator[str]:
         """Stream response with conversation context"""
 
-        # Format prompt with context
+        # 항상 컨텍스트를 포함하여 LLM이 질문 유형을 판단하도록 함
+        query_lower = query.lower()
+
+        # Format prompt with context - 항상 컨텍스트 포함
         system_prompt = PromptTemplates.get_system_prompt(evidences)
-        user_prompt = PromptTemplates.format_user_prompt(query, evidences)
+        user_prompt = PromptTemplates.format_user_prompt(query, evidences, context, is_meta_query=False)
 
-        # Build message list with context
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # Add conversation context if provided
-        if context:
-            for msg in context[-4:]:  # Keep last 4 messages for context
-                if msg.get("role") and msg.get("content"):
-                    messages.append({"role": msg["role"], "content": msg["content"]})
-
-        # Add current query
-        messages.append({"role": "user", "content": user_prompt})
+        # Build message list - 시스템 프롬프트와 사용자 프롬프트만 사용
+        # 컨텍스트는 user_prompt에 이미 포함되어 있음
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
 
         # Prepare request
         request_data = {

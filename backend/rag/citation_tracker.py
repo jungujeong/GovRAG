@@ -16,33 +16,60 @@ class CitationTracker:
         self.embedder = None
         self._init_embedder()
     
-    def track_citations(self, 
+    def track_citations(self,
                        response: Dict,
-                       evidences: List[Dict]) -> Dict:
+                       evidences: List[Dict],
+                       allowed_doc_ids: Optional[List[str]] = None,
+                       fixed_citation_map: Optional[Dict[str, int]] = None) -> Dict:
         """Add citation tracking to response"""
-        
+
         # Extract citations from response
         answer = response.get("answer", "")
         sources = response.get("sources", [])
-        
+
+        # Filter sources if allowed_doc_ids is provided
+        if allowed_doc_ids:
+            # Filter evidences to only allowed documents
+            filtered_evidences = [e for e in evidences if e.get("doc_id") in allowed_doc_ids]
+            # Filter sources to only allowed documents
+            sources = [s for s in sources if s.get("doc_id") in allowed_doc_ids]
+            logger.info(f"Citation tracking: filtered {len(evidences)} to {len(filtered_evidences)} evidences based on allowed docs: {allowed_doc_ids}")
+            evidences = filtered_evidences
+
         # Create citation map from evidences
         self.citation_map = self._build_citation_map(evidences)
-        
-        # Add inline citations to answer
-        answer_with_citations = self._add_inline_citations(answer, evidences)
-        response["answer"] = answer_with_citations
-        
-        # Format source list
-        formatted_sources = self._format_sources(sources, evidences)
-        response["sources"] = formatted_sources
-        
+
+        # Use fixed citation map if provided (for follow-up questions)
+        if fixed_citation_map:
+            # Add inline citations using fixed mapping
+            answer_with_citations = self._add_inline_citations_with_fixed_map(answer, evidences, fixed_citation_map)
+            response["answer"] = answer_with_citations
+
+            # Format sources using fixed mapping
+            formatted_sources = self._format_sources_with_fixed_map(sources, evidences, fixed_citation_map)
+            response["sources"] = formatted_sources
+
+            # Store the citation map for return
+            response["citation_map"] = fixed_citation_map
+        else:
+            # Add inline citations to answer (first response)
+            answer_with_citations, used_citation_map = self._add_inline_citations_with_map_tracking(answer, evidences)
+            response["answer"] = answer_with_citations
+
+            # Format source list
+            formatted_sources = self._format_sources(sources, evidences)
+            response["sources"] = formatted_sources
+
+            # Store the citation map for future use
+            response["citation_map"] = used_citation_map
+
         # Add citation JSON
         response["citations_json"] = json.dumps(
-            formatted_sources,
+            formatted_sources if "sources" in response else [],
             ensure_ascii=False,
             indent=2
         )
-        
+
         return response
     
     def _build_citation_map(self, evidences: List[Dict]) -> Dict:
@@ -326,8 +353,153 @@ class CitationTracker:
                 line += f" ({start}-{end})"
             
             display_lines.append(line)
-        
+
         return "\n".join(display_lines)
+
+    def _add_inline_citations_with_map_tracking(self, answer: str, evidences: List[Dict]) -> Tuple[str, Dict[str, int]]:
+        """Add inline citations and track the mapping used"""
+        cited_evidences = {}
+
+        # Process text to fix citations
+        lines = answer.split('\n')
+        fixed_lines = []
+        next_citation_num = 1
+
+        for line in lines:
+            # Check if this line contains numbered items with citations
+            if re.match(r'^\d+\.\[', line):
+                # Extract the content and find matching evidence
+                fixed_line = self._fix_line_citation_sequential(line, evidences, cited_evidences, next_citation_num)
+                # Update next citation number if new citation was added
+                if fixed_line != line:
+                    match = re.search(r'\[(\d+)\]', fixed_line)
+                    if match:
+                        cite_num = int(match.group(1))
+                        if cite_num >= next_citation_num:
+                            next_citation_num = cite_num + 1
+                fixed_lines.append(fixed_line)
+            else:
+                # For non-numbered lines, add citations based on content matching
+                fixed_line = self._add_citations_to_line_sequential(line, evidences, cited_evidences, next_citation_num)
+                # Update next citation number if new citation was added
+                if fixed_line != line:
+                    match = re.search(r'\[(\d+)\]', fixed_line)
+                    if match:
+                        cite_num = int(match.group(1))
+                        if cite_num >= next_citation_num:
+                            next_citation_num = cite_num + 1
+                fixed_lines.append(fixed_line)
+
+        return '\n'.join(fixed_lines), cited_evidences
+
+    def _add_inline_citations_with_fixed_map(self, answer: str, evidences: List[Dict], fixed_map: Dict[str, int]) -> str:
+        """Add inline citations using fixed citation mapping"""
+        lines = answer.split('\n')
+        fixed_lines = []
+
+        for line in lines:
+            # Check for numbered list with citation
+            if re.match(r'^\d+\.\[', line):
+                fixed_line = self._fix_line_citation_with_fixed_map(line, evidences, fixed_map)
+                fixed_lines.append(fixed_line)
+            else:
+                # For non-numbered lines, add citations based on content matching
+                fixed_line = self._add_citations_to_line_with_fixed_map(line, evidences, fixed_map)
+                fixed_lines.append(fixed_line)
+
+        return '\n'.join(fixed_lines)
+
+    def _fix_line_citation_with_fixed_map(self, line: str, evidences: List[Dict], fixed_map: Dict[str, int]) -> str:
+        """Fix citation number in a numbered line using fixed mapping"""
+        # Extract item number and content
+        match = re.match(r'^(\d+)\.\[(\d+)\]\s*(.*)', line)
+        if not match:
+            return line
+
+        item_num = match.group(1)
+        content = match.group(3)
+
+        # Find the best matching evidence for this content
+        best_match_evidence = None
+        best_score = 0
+
+        for evidence in evidences:
+            evidence_text = evidence.get("text", "")
+            score = self._calculate_content_similarity(content, evidence_text)
+
+            if score > best_score:
+                best_score = score
+                best_match_evidence = evidence
+
+        # If we found a good match, use fixed citation number
+        if best_match_evidence and best_score > 0.3:
+            # Create unique key for this evidence
+            evidence_key = f"{best_match_evidence.get('doc_id', '')}_{best_match_evidence.get('page', 0)}_{best_match_evidence.get('chunk_id', '')}"
+
+            # Get fixed citation number
+            if evidence_key in fixed_map:
+                cite_num = fixed_map[evidence_key]
+                return f"{item_num}.[{cite_num}] {content}"
+
+        # Keep original if no match in fixed map
+        return line
+
+    def _add_citations_to_line_with_fixed_map(self, line: str, evidences: List[Dict], fixed_map: Dict[str, int]) -> str:
+        """Add citations to a line using fixed mapping"""
+        if not line.strip():
+            return line
+
+        # Check which evidence this line matches
+        best_match_evidence = None
+        best_score = 0
+
+        for evidence in evidences:
+            evidence_text = evidence.get("text", "")
+            score = self._calculate_content_similarity(line, evidence_text)
+
+            if score > best_score:
+                best_score = score
+                best_match_evidence = evidence
+
+        # Add citation if good match found and not already present
+        if best_match_evidence and best_score > 0.3 and not re.search(r'\[\d+\]', line):
+            # Create unique key for this evidence
+            evidence_key = f"{best_match_evidence.get('doc_id', '')}_{best_match_evidence.get('page', 0)}_{best_match_evidence.get('chunk_id', '')}"
+
+            # Get fixed citation number
+            if evidence_key in fixed_map:
+                cite_num = fixed_map[evidence_key]
+                return f"{line}[{cite_num}]"
+
+        return line
+
+    def _format_sources_with_fixed_map(self, sources: List[Dict], evidences: List[Dict], fixed_map: Dict[str, int]) -> List[Dict]:
+        """Format sources using fixed citation mapping"""
+        formatted = []
+
+        # Create reverse map (citation_number -> evidence_key)
+        reverse_map = {v: k for k, v in fixed_map.items()}
+
+        # Sort by citation number
+        for cite_num in sorted(reverse_map.keys()):
+            evidence_key = reverse_map[cite_num]
+
+            # Find the corresponding evidence
+            for evidence in evidences:
+                current_key = f"{evidence.get('doc_id', '')}_{evidence.get('page', 0)}_{evidence.get('chunk_id', '')}"
+                if current_key == evidence_key:
+                    formatted.append({
+                        "index": cite_num,
+                        "doc_id": evidence.get("doc_id", "unknown"),
+                        "page": evidence.get("page", 0),
+                        "start_char": evidence.get("start_char", -1),
+                        "end_char": evidence.get("end_char", -1),
+                        "chunk_id": evidence.get("chunk_id", ""),
+                        "text_snippet": evidence.get("text", "")
+                    })
+                    break
+
+        return formatted
     
     def _init_embedder(self):
         """Initialize sentence embedder for semantic similarity"""

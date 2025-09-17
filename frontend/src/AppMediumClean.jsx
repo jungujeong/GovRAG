@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { chatAPI } from './services/chatAPI'
 import './styles/MediumDesign.css'
 import DocumentDetailsPopup from './components/DocumentDetailsPopup'
 import CitationPopup from './components/CitationPopup'
+import { chatAPI } from './services/chatAPI'
 
 // Configure axios defaults
 axios.defaults.baseURL = 'http://localhost:8000'
@@ -507,10 +507,14 @@ function AppMediumClean() {
         return updated
       })
       setStreamStatus('')
-      
-      // 첫 메시지인 경우 세션 제목 업데이트
-      if (messages.length === 1) {  // userMessage만 있는 경우
-        await updateSessionTitle(sessionId, message.substring(0, 30))
+
+      // 제목 업데이트 확인 (서버에서 처리되면 메타데이터에 포함됨)
+      if (finalResponse.metadata?.title_updated && finalResponse.metadata?.new_title) {
+        // 로컬 상태 즉시 업데이트
+        setSessions(prev => prev.map(s =>
+          s.id === sessionId ? { ...s, title: finalResponse.metadata.new_title } : s
+        ))
+        console.log('Title updated:', finalResponse.metadata.new_title)
       }
     } catch (error) {
       // 요청 취소 에러는 별도 처리
