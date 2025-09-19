@@ -1,7 +1,7 @@
-import AppMediumClean from './AppMediumClean'
+import AppGov24 from './AppGov24'
 
 function App() {
-  return <AppMediumClean />
+  return <AppGov24 />
 }
 
 export default App

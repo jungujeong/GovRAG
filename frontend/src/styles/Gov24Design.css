@@ -1,0 +1,1307 @@
+/* 정부24 스타일 디자인 시스템 */
+
+/* Root Variables - 정부24 스타일 컬러팔레트 */
+:root {
+  /* Primary Colors - 파란색 계열 */
+  --gov24-primary: #2E5BFF;
+  --gov24-primary-light: #4A90E2;
+  --gov24-primary-dark: #1E3FCC;
+  --gov24-primary-hover: #3E6BFF;
+
+  /* Secondary Colors */
+  --gov24-secondary: #F8F9FA;
+  --gov24-secondary-dark: #E9ECEF;
+
+  /* Background Colors */
+  --gov24-bg-main: #FFFFFF;
+  --gov24-bg-light: #F8F9FA;
+  --gov24-bg-chat: #F5F7FF;
+  --gov24-bg-sidebar: #FAFBFF;
+
+  /* Text Colors */
+  --gov24-text-primary: #212529;
+  --gov24-text-secondary: #6C757D;
+  --gov24-text-muted: #ADB5BD;
+  --gov24-text-white: #FFFFFF;
+
+  /* Border Colors */
+  --gov24-border: #DEE2E6;
+  --gov24-border-light: #E9ECEF;
+  --gov24-border-focus: #2E5BFF;
+
+  /* Status Colors */
+  --gov24-success: #28A745;
+  --gov24-warning: #FFC107;
+  --gov24-error: #DC3545;
+  --gov24-info: #17A2B8;
+
+  /* Typography */
+  --font-primary: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-secondary: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Font Sizes - 40-50대 공무원을 위한 큰 글씨 */
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-base: 16px;
+  --font-size-lg: 18px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --font-size-3xl: 28px;
+  --font-size-4xl: 32px;
+
+  /* Font Weights */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Line Heights */
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.6;
+  --line-height-loose: 1.8;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 20px;
+  --spacing-2xl: 24px;
+  --spacing-3xl: 32px;
+  --spacing-4xl: 40px;
+  --spacing-5xl: 48px;
+
+  /* Layout */
+  --header-height: 72px;
+  --sidebar-width: 320px;
+  --container-max-width: 1400px;
+  --content-max-width: 800px;
+
+  /* Border Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  /* Transitions */
+  --transition-fast: 0.15s ease-in-out;
+  --transition-normal: 0.2s ease-in-out;
+  --transition-slow: 0.3s ease-in-out;
+}
+
+/* Reset & Base Styles */
+.gov24-app {
+  font-family: var(--font-primary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--gov24-text-primary);
+  background-color: var(--gov24-bg-main);
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+.gov24-app *,
+.gov24-app *::before,
+.gov24-app *::after {
+  box-sizing: border-box;
+}
+
+/* Header Styles */
+.gov24-header {
+  background: var(--gov24-bg-main);
+  border-bottom: 2px solid var(--gov24-border);
+  height: var(--header-height);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-header-content {
+  max-width: var(--container-max-width);
+  margin: 0 auto;
+  padding: 0 var(--spacing-2xl);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.gov24-logo {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-primary);
+}
+
+.gov24-logo-icon {
+  font-size: var(--font-size-2xl);
+}
+
+.gov24-logo-text {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.gov24-nav {
+  display: flex;
+  gap: var(--spacing-2xl);
+}
+
+.gov24-nav-link {
+  background: none;
+  border: none;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  color: var(--gov24-text-secondary);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  position: relative;
+}
+
+.gov24-nav-link:hover {
+  color: var(--gov24-primary);
+  background-color: var(--gov24-bg-light);
+}
+
+.gov24-nav-link.active {
+  color: var(--gov24-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.gov24-nav-link.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 3px;
+  background-color: var(--gov24-primary);
+  border-radius: var(--radius-full);
+}
+
+.gov24-nav-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.gov24-new-chat-button {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-md) var(--spacing-xl);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-new-chat-button:hover:not(:disabled) {
+  background: var(--gov24-primary-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.gov24-new-chat-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Error Banner */
+.gov24-error-banner {
+  background: var(--gov24-error);
+  color: var(--gov24-text-white);
+  padding: var(--spacing-md) var(--spacing-2xl);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: var(--font-weight-medium);
+}
+
+.gov24-error-banner button {
+  background: none;
+  border: none;
+  color: var(--gov24-text-white);
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+  padding: var(--spacing-xs);
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.gov24-error-banner button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Main Layout */
+.gov24-main {
+  max-width: var(--container-max-width);
+  margin: 0 auto;
+  padding: var(--spacing-2xl);
+  min-height: calc(100vh - var(--header-height));
+}
+
+.gov24-chat-layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  gap: var(--spacing-3xl);
+  height: calc(100vh - var(--header-height) - var(--spacing-4xl));
+}
+
+/* Sidebar Styles */
+.gov24-sidebar {
+  background: var(--gov24-bg-sidebar);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-2xl);
+  border: 1px solid var(--gov24-border-light);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-xl);
+  padding-bottom: var(--spacing-lg);
+  border-bottom: 2px solid var(--gov24-border-light);
+}
+
+.gov24-sidebar-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-text-primary);
+  margin: 0;
+}
+
+.gov24-new-session-button {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  white-space: nowrap;
+}
+
+.gov24-new-session-button:hover:not(:disabled) {
+  background: var(--gov24-primary-hover);
+  transform: translateY(-1px);
+}
+
+.gov24-new-session-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.gov24-session-list {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 -var(--spacing-md);
+  padding: 0 var(--spacing-md);
+}
+
+.gov24-session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  border: 1px solid transparent;
+}
+
+.gov24-session-item:hover {
+  background: var(--gov24-bg-main);
+  border-color: var(--gov24-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-session-item.active {
+  background: var(--gov24-bg-main);
+  border-color: var(--gov24-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.gov24-session-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.gov24-session-title {
+  flex: 1;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--gov24-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: var(--spacing-md);
+}
+
+.gov24-session-input {
+  flex: 1;
+  background: var(--gov24-bg-main);
+  border: 2px solid var(--gov24-border-focus);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-base);
+  font-family: var(--font-primary);
+  color: var(--gov24-text-primary);
+  outline: none;
+}
+
+.gov24-session-delete {
+  background: none;
+  border: none;
+  color: var(--gov24-text-muted);
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+  padding: var(--spacing-xs);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  opacity: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gov24-session-item:hover .gov24-session-delete,
+.gov24-session-item.active .gov24-session-delete {
+  opacity: 1;
+}
+
+.gov24-session-delete:hover {
+  color: var(--gov24-error);
+  background: rgba(220, 53, 69, 0.1);
+}
+
+.gov24-session-delete:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.gov24-sidebar-footer {
+  margin-top: var(--spacing-xl);
+  padding-top: var(--spacing-lg);
+  border-top: 2px solid var(--gov24-border-light);
+}
+
+.gov24-doc-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.gov24-doc-count,
+.gov24-doc-indexed {
+  font-size: var(--font-size-sm);
+  color: var(--gov24-text-secondary);
+}
+
+.gov24-doc-indexed {
+  color: var(--gov24-success);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Content Area */
+.gov24-content {
+  background: var(--gov24-bg-chat);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--gov24-border-light);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacing-2xl);
+  max-height: calc(100vh - var(--header-height) - 200px);
+}
+
+/* Welcome Section */
+.gov24-welcome {
+  text-align: center;
+  padding: var(--spacing-5xl) var(--spacing-2xl);
+}
+
+.gov24-welcome-header {
+  margin-bottom: var(--spacing-4xl);
+}
+
+.gov24-welcome-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-primary);
+  margin: 0 0 var(--spacing-lg) 0;
+}
+
+.gov24-welcome-text {
+  font-size: var(--font-size-lg);
+  color: var(--gov24-text-secondary);
+  margin: 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.gov24-upload-prompt {
+  margin-bottom: var(--spacing-4xl);
+}
+
+.gov24-upload-button {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-xl) var(--spacing-3xl);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  box-shadow: var(--shadow-md);
+}
+
+.gov24-upload-button:hover {
+  background: var(--gov24-primary-hover);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+
+/* Example Questions */
+.gov24-example-questions {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.gov24-example-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--gov24-text-primary);
+  margin: 0 0 var(--spacing-xl) 0;
+}
+
+.gov24-example-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--spacing-lg);
+}
+
+.gov24-example-question {
+  background: var(--gov24-bg-main);
+  border: 2px solid var(--gov24-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--gov24-text-primary);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  text-align: left;
+  line-height: var(--line-height-relaxed);
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-example-question:hover:not(:disabled) {
+  border-color: var(--gov24-primary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.gov24-example-question:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Message Styles */
+.gov24-message {
+  margin-bottom: var(--spacing-3xl);
+  display: flex;
+  flex-direction: column;
+}
+
+.gov24-message.user {
+  align-items: flex-end;
+}
+
+.gov24-message.assistant {
+  align-items: flex-start;
+}
+
+.gov24-message-content {
+  max-width: 85%;
+  position: relative;
+}
+
+/* User Message Card */
+.gov24-message.user .gov24-message-content {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
+  box-shadow: var(--shadow-md);
+}
+
+/* Assistant Message Card */
+.gov24-message.assistant .gov24-message-content {
+  background: var(--gov24-bg-main);
+  color: var(--gov24-text-primary);
+  padding: var(--spacing-xl);
+  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xl) var(--radius-sm);
+  border: 1px solid var(--gov24-border);
+  box-shadow: var(--shadow-md);
+}
+
+.gov24-message.assistant.error .gov24-message-content {
+  border-color: var(--gov24-error);
+  background: rgba(220, 53, 69, 0.05);
+}
+
+/* Message Text Typography */
+.gov24-message-text {
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-relaxed);
+}
+
+.gov24-message.user .gov24-message-text {
+  font-weight: var(--font-weight-medium);
+}
+
+.gov24-paragraph {
+  margin: 0 0 var(--spacing-lg) 0;
+}
+
+.gov24-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.gov24-bold {
+  font-weight: var(--font-weight-bold);
+}
+
+.gov24-italic {
+  font-style: italic;
+}
+
+.gov24-heading {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-primary);
+  margin: var(--spacing-xl) 0 var(--spacing-md) 0;
+}
+
+.gov24-answer-header,
+.gov24-facts-header,
+.gov24-details-header {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-primary);
+  margin: var(--spacing-xl) 0 var(--spacing-md) 0;
+  border-bottom: 2px solid var(--gov24-border-light);
+  padding-bottom: var(--spacing-sm);
+}
+
+.gov24-list,
+.gov24-ordered-list {
+  margin: var(--spacing-md) 0;
+  padding-left: var(--spacing-xl);
+}
+
+.gov24-fact-item {
+  margin: var(--spacing-sm) 0;
+  line-height: var(--line-height-relaxed);
+}
+
+/* Message Time */
+.gov24-message-time {
+  font-size: var(--font-size-xs);
+  color: var(--gov24-text-muted);
+  margin-top: var(--spacing-sm);
+  text-align: right;
+}
+
+.gov24-message.user .gov24-message-time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Loading and Streaming Indicators */
+.gov24-streaming-indicator,
+.gov24-loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-lg);
+  background: var(--gov24-bg-light);
+  border-radius: var(--radius-md);
+  margin: var(--spacing-md) 0;
+}
+
+.gov24-loading-dots {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.gov24-loading-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gov24-primary);
+  animation: gov24-pulse 1.4s ease-in-out infinite;
+}
+
+.gov24-loading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.gov24-loading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes gov24-pulse {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.gov24-streaming-text,
+.gov24-loading-text {
+  font-size: var(--font-size-sm);
+  color: var(--gov24-text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.gov24-cancel-button {
+  background: var(--gov24-error);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  margin-left: auto;
+}
+
+.gov24-cancel-button:hover {
+  background: #c82333;
+}
+
+/* Sources Section */
+.gov24-sources-section {
+  margin-top: var(--spacing-xl);
+  padding-top: var(--spacing-lg);
+  border-top: 2px solid var(--gov24-border-light);
+}
+
+.gov24-sources-title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-primary);
+  margin: 0 0 var(--spacing-md) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.gov24-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.gov24-source-button {
+  background: var(--gov24-bg-light);
+  border: 2px solid var(--gov24-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.gov24-source-button:hover {
+  border-color: var(--gov24-primary);
+  background: var(--gov24-bg-main);
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-source-number {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.gov24-source-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--gov24-text-primary);
+  flex: 1;
+}
+
+/* Input Area */
+.gov24-input-area {
+  background: var(--gov24-bg-main);
+  border-top: 2px solid var(--gov24-border-light);
+  padding: var(--spacing-xl);
+}
+
+.gov24-input-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: var(--spacing-md);
+}
+
+.gov24-file-upload-button {
+  background: var(--gov24-bg-light);
+  border: 2px solid var(--gov24-border);
+  border-radius: var(--radius-full);
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  font-size: var(--font-size-lg);
+}
+
+.gov24-file-upload-button:hover:not(:disabled) {
+  border-color: var(--gov24-primary);
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  transform: translateY(-1px);
+}
+
+.gov24-file-upload-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gov24-input-container {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: flex-end;
+}
+
+.gov24-input {
+  flex: 1;
+  background: var(--gov24-bg-main);
+  border: 2px solid var(--gov24-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  font-family: var(--font-primary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--gov24-text-primary);
+  resize: none;
+  transition: all var(--transition-normal);
+  min-height: 60px;
+  max-height: 120px;
+}
+
+.gov24-input:focus {
+  outline: none;
+  border-color: var(--gov24-primary);
+  box-shadow: 0 0 0 3px rgba(46, 91, 255, 0.1);
+}
+
+.gov24-input:disabled {
+  background: var(--gov24-bg-light);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.gov24-input::placeholder {
+  color: var(--gov24-text-muted);
+}
+
+.gov24-send-button {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-lg) var(--spacing-2xl);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  white-space: nowrap;
+  min-height: 60px;
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-send-button:hover:not(:disabled) {
+  background: var(--gov24-primary-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.gov24-send-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Upload Progress */
+.gov24-upload-progress {
+  margin-top: var(--spacing-md);
+  background: var(--gov24-bg-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+}
+
+.gov24-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--gov24-border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin-bottom: var(--spacing-sm);
+}
+
+.gov24-progress-fill {
+  height: 100%;
+  background: var(--gov24-primary);
+  border-radius: var(--radius-full);
+  transition: width var(--transition-normal);
+}
+
+.gov24-progress-text {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--gov24-text-secondary);
+}
+
+/* Document Management */
+.gov24-manage-container {
+  padding: var(--spacing-2xl);
+}
+
+.gov24-manage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-3xl);
+  padding-bottom: var(--spacing-lg);
+  border-bottom: 2px solid var(--gov24-border-light);
+}
+
+.gov24-manage-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-primary);
+  margin: 0;
+}
+
+.gov24-manage-actions {
+  display: flex;
+  gap: var(--spacing-md);
+}
+
+.gov24-upload-docs-button {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-md) var(--spacing-xl);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-upload-docs-button:hover {
+  background: var(--gov24-primary-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.gov24-delete-all-button {
+  background: none;
+  color: var(--gov24-error);
+  border: 2px solid var(--gov24-error);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-md) var(--spacing-xl);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.gov24-delete-all-button:hover {
+  background: var(--gov24-error);
+  color: var(--gov24-text-white);
+}
+
+/* No Documents State */
+.gov24-no-documents {
+  text-align: center;
+  padding: var(--spacing-5xl);
+  background: var(--gov24-bg-light);
+  border-radius: var(--radius-xl);
+  border: 2px dashed var(--gov24-border);
+}
+
+.gov24-no-docs-icon {
+  font-size: 64px;
+  margin-bottom: var(--spacing-xl);
+  opacity: 0.5;
+}
+
+.gov24-no-docs-title {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-text-primary);
+  margin: 0 0 var(--spacing-lg) 0;
+}
+
+.gov24-no-docs-text {
+  font-size: var(--font-size-lg);
+  color: var(--gov24-text-secondary);
+  margin: 0 0 var(--spacing-3xl) 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.gov24-upload-first-button {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+  border: none;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-xl) var(--spacing-3xl);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  box-shadow: var(--shadow-md);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.gov24-upload-first-button:hover {
+  background: var(--gov24-primary-hover);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+
+/* Document Grid */
+.gov24-document-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: var(--spacing-xl);
+}
+
+.gov24-document-card {
+  background: var(--gov24-bg-main);
+  border: 2px solid var(--gov24-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-xl);
+  transition: all var(--transition-normal);
+  box-shadow: var(--shadow-sm);
+}
+
+.gov24-document-card:hover {
+  border-color: var(--gov24-primary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.gov24-doc-icon {
+  font-size: var(--font-size-3xl);
+  margin-bottom: var(--spacing-lg);
+  text-align: center;
+}
+
+.gov24-doc-name {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--gov24-text-primary);
+  margin: 0 0 var(--spacing-md) 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gov24-doc-meta {
+  display: flex;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+}
+
+.gov24-doc-size,
+.gov24-doc-pages {
+  font-size: var(--font-size-sm);
+  color: var(--gov24-text-secondary);
+}
+
+.gov24-doc-status {
+  margin-bottom: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.gov24-status-indexed {
+  color: var(--gov24-success);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+}
+
+.gov24-status-processing {
+  color: var(--gov24-warning);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+}
+
+.gov24-status-pending {
+  color: var(--gov24-text-muted);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+}
+
+.gov24-chunk-count {
+  font-size: var(--font-size-xs);
+  color: var(--gov24-text-muted);
+}
+
+.gov24-doc-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.gov24-doc-button {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  border: 2px solid;
+  background: none;
+}
+
+.gov24-doc-detail {
+  color: var(--gov24-primary);
+  border-color: var(--gov24-primary);
+}
+
+.gov24-doc-detail:hover {
+  background: var(--gov24-primary);
+  color: var(--gov24-text-white);
+}
+
+.gov24-doc-process {
+  color: var(--gov24-success);
+  border-color: var(--gov24-success);
+}
+
+.gov24-doc-process:hover {
+  background: var(--gov24-success);
+  color: var(--gov24-text-white);
+}
+
+.gov24-doc-delete {
+  color: var(--gov24-error);
+  border-color: var(--gov24-error);
+}
+
+.gov24-doc-delete:hover {
+  background: var(--gov24-error);
+  color: var(--gov24-text-white);
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+  .gov24-chat-layout {
+    grid-template-columns: 280px 1fr;
+    gap: var(--spacing-xl);
+  }
+
+  .gov24-sidebar {
+    padding: var(--spacing-lg);
+  }
+
+  --sidebar-width: 280px;
+}
+
+@media (max-width: 768px) {
+  .gov24-header-content {
+    padding: 0 var(--spacing-lg);
+  }
+
+  .gov24-logo-text {
+    display: none;
+  }
+
+  .gov24-nav {
+    gap: var(--spacing-lg);
+  }
+
+  .gov24-nav-link {
+    font-size: var(--font-size-base);
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .gov24-new-chat-button {
+    font-size: var(--font-size-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+  }
+
+  .gov24-main {
+    padding: var(--spacing-lg);
+  }
+
+  .gov24-chat-layout {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-lg);
+    height: auto;
+  }
+
+  .gov24-sidebar {
+    order: 2;
+    max-height: 300px;
+  }
+
+  .gov24-content {
+    order: 1;
+    min-height: 500px;
+  }
+
+  .gov24-document-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gov24-example-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gov24-message-content {
+    max-width: 95%;
+  }
+
+  .gov24-manage-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-lg);
+  }
+
+  .gov24-manage-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .gov24-welcome {
+    padding: var(--spacing-3xl) var(--spacing-lg);
+  }
+
+  .gov24-welcome-title {
+    font-size: var(--font-size-2xl);
+  }
+
+  .gov24-input-container {
+    flex-direction: column;
+    gap: var(--spacing-md);
+  }
+
+  .gov24-send-button {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .gov24-example-question {
+    padding: var(--spacing-md);
+    font-size: var(--font-size-sm);
+  }
+}
+
+/* High Contrast Mode Support */
+@media (prefers-contrast: high) {
+  :root {
+    --gov24-border: #000000;
+    --gov24-border-light: #666666;
+    --gov24-text-secondary: #000000;
+  }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus Styles for Accessibility */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid var(--gov24-primary);
+  outline-offset: 2px;
+}
+
+/* Screen Reader Only Content */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
