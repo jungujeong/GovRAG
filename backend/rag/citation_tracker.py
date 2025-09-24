@@ -103,7 +103,7 @@ class CitationTracker:
 
             # Format sources using fixed mapping
             formatted_sources = self._format_sources_with_fixed_map(sources, evidences, fixed_citation_map)
-            response["sources"] = formatted_sources
+            response["sources"] = self._dedupe_sources(formatted_sources)
 
             # Store the citation map for return
             response["citation_map"] = fixed_citation_map
@@ -114,7 +114,7 @@ class CitationTracker:
 
             # Format source list
             formatted_sources = self._format_sources(sources, evidences)
-            response["sources"] = formatted_sources
+            response["sources"] = self._dedupe_sources(formatted_sources)
 
             # Store the citation map for future use
             response["citation_map"] = used_citation_map
@@ -133,10 +133,12 @@ class CitationTracker:
         citation_map = {}
         
         for idx, evidence in enumerate(evidences, 1):
-            key = f"{evidence.get('doc_id', '')}_{evidence.get('page', 0)}"
+            raw_id = evidence.get('doc_id', '') or ''
+            norm_id = unicodedata.normalize('NFC', str(raw_id).strip())
+            key = f"{norm_id}_{evidence.get('page', 0)}"
             citation_map[key] = {
                 "index": idx,
-                "doc_id": evidence.get("doc_id", "unknown"),
+                "doc_id": norm_id or "unknown",
                 "page": evidence.get("page", 0),
                 "start_char": evidence.get("start_char", -1),
                 "end_char": evidence.get("end_char", -1),
@@ -144,6 +146,24 @@ class CitationTracker:
             }
         
         return citation_map
+
+    def _dedupe_sources(self, sources: List[Dict]) -> List[Dict]:
+        """Remove duplicate sources by normalized (doc_id, page, chunk_id)."""
+        seen = set()
+        deduped: List[Dict] = []
+        for s in sources or []:
+            raw_id = s.get('doc_id') or s.get('metadata', {}).get('doc_id') or ''
+            norm_id = unicodedata.normalize('NFC', str(raw_id).strip())
+            page = s.get('page', 0)
+            chunk_id = s.get('chunk_id', '')
+            key = (norm_id, page, chunk_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            s = dict(s)
+            s['doc_id'] = norm_id
+            deduped.append(s)
+        return deduped
     
     def _add_inline_citations(self, text: str, evidences: List[Dict]) -> str:
         """Add inline citation markers to text - ensuring sequential numbering"""

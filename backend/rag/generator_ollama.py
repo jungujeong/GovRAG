@@ -175,41 +175,41 @@ class OllamaGenerator:
         return result
     
     def _clean_non_korean(self, text: str) -> str:
-        """Remove non-Korean language content using Unicode ranges"""
+        """Remove non-Korean content while preserving line breaks and spacing semantics."""
         if not text:
             return text
-        
-        # Define allowed Unicode ranges
-        # Korean characters: Hangul Syllables (AC00-D7AF), Jamo (1100-11FF, 3130-318F, A960-A97F, D7B0-D7FF)
-        # Also keep ASCII printable characters (0020-007E) for numbers, basic punctuation, and English names
-        # Add common punctuation that might be used in Korean text
-        allowed_chars = []
-        
-        for char in text:
-            code = ord(char)
-            # Keep Korean characters
-            if (0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
+
+        out_chars = []
+        for ch in text:
+            # Preserve newlines and tabs to avoid merging tokens across lines
+            if ch in ('\n', '\t'):
+                out_chars.append(ch)
+                continue
+            code = ord(ch)
+            if (
+                0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
                 0x1100 <= code <= 0x11FF or  # Hangul Jamo
                 0x3130 <= code <= 0x318F or  # Hangul Compatibility Jamo
                 0xA960 <= code <= 0xA97F or  # Hangul Jamo Extended-A
-                0xD7B0 <= code <= 0xD7FF):   # Hangul Jamo Extended-B
-                allowed_chars.append(char)
-            # Keep ASCII printable characters (space to ~)
-            elif 0x0020 <= code <= 0x007E:
-                allowed_chars.append(char)
-            # Keep common Korean punctuation
-            elif char in '·、。「」『』〈〉《》【】〔〕':
-                allowed_chars.append(char)
-            # Replace other characters with space to maintain word boundaries
+                0xD7B0 <= code <= 0xD7FF     # Hangul Jamo Extended-B
+            ):
+                out_chars.append(ch)
+            elif 0x0020 <= code <= 0x007E:  # Basic ASCII printable
+                out_chars.append(ch)
+            elif ch in '·、。「」『』〈〉《》【】〔〕':
+                out_chars.append(ch)
             else:
-                allowed_chars.append(' ')
-        
-        result = ''.join(allowed_chars)
-        
-        # Clean up multiple spaces
-        result = re.sub(r'\s+', ' ', result)
-        
-        return result.strip()
+                out_chars.append(' ')
+
+        # Collapse spaces per line but preserve line boundaries
+        cleaned_lines = []
+        for line in ''.join(out_chars).splitlines(True):  # keepends=True
+            # Replace runs of spaces/tabs with a single space
+            replaced = re.sub(r'[ \t]+', ' ', line)
+            cleaned_lines.append(replaced)
+
+        result = ''.join(cleaned_lines)
+        return result.strip('\n')
     
     def _parse_source(self, line: str) -> Optional[Dict]:
         """Parse source citation line"""

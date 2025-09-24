@@ -817,6 +817,7 @@ async def send_message(
             # Use fixed citation map for follow-up questions
             fixed_citation_map = session.first_response_citation_map if should_use_previous_sources and session.first_response_citation_map else None
 
+            # Guard fixed citation map usage: only when scope/doc set unchanged and evidence count matches
             if fixed_citation_map:
                 logger.info(f"🔵 FOLLOW-UP - Using fixed citation map")
                 logger.info(f"  - Fixed citation map: {fixed_citation_map}")
@@ -827,6 +828,14 @@ async def send_message(
                 first_evidence_count = session.metadata.get("first_response_evidences_count", 0) if session.metadata else 0
                 if len(evidences) != first_evidence_count:
                     logger.error(f"⚠️ Evidence count mismatch! First: {first_evidence_count}, Current: {len(evidences)}")
+                    fixed_citation_map = None
+
+                # Disable fixed map if topic changed or document scope diverged
+                meta_resolved = set(doc_scope_metadata.get("resolved_doc_ids") or doc_scope_metadata.get("doc_scope_ids") or [])
+                prev_set = set(previous_doc_ids or [])
+                if topic_change_detected or (meta_resolved and prev_set and meta_resolved != prev_set):
+                    logger.info("Disabling fixed citation map due to topic change or scope divergence")
+                    fixed_citation_map = None
 
             response = citation_tracker.track_citations(response, evidences, allowed_doc_ids=allowed_docs, fixed_citation_map=fixed_citation_map)
             
@@ -1399,6 +1408,14 @@ async def send_message_stream(
             )
             # Use fixed citation map for follow-up questions (streaming)
             fixed_citation_map = session.first_response_citation_map if should_use_previous_sources and session.first_response_citation_map else None
+            if fixed_citation_map:
+                first_evidence_count = session.metadata.get("first_response_evidences_count", 0) if session.metadata else 0
+                if len(evidences) != first_evidence_count:
+                    fixed_citation_map = None
+                meta_resolved = set(doc_scope_metadata.get("resolved_doc_ids") or doc_scope_metadata.get("doc_scope_ids") or [])
+                prev_set = set(previous_doc_ids or [])
+                if meta_resolved and prev_set and meta_resolved != prev_set:
+                    fixed_citation_map = None
             response_payload = citation_tracker.track_citations(
                 response_payload,
                 evidences,

@@ -26,11 +26,10 @@ class AnswerFormatter:
         # if allowed_doc_ids:
         #     response = self._remove_invalid_source_refs(response, allowed_doc_ids)
 
-        # Filter sources to only include those cited in the answer
-        response = self._filter_cited_sources(response)
-
-        # Reorder citations in the answer text to be sequential
-        response = self._reorder_citations(response)
+        # If citation_map exists (from tracker), trust it and avoid extra renumbering
+        if not response.get("citation_map"):
+            response = self._filter_cited_sources(response)
+            response = self._reorder_citations(response)
 
         formatted = {
             "formatted_text": self._format_as_text(response),
@@ -65,9 +64,12 @@ class AnswerFormatter:
         if not text:
             return text
 
-        # Filter to keep only Korean, ASCII, and common punctuation
+        # Filter to keep only Korean, ASCII, and common punctuation (preserve newlines)
         cleaned_chars = []
         for char in text:
+            if char == '\n':
+                cleaned_chars.append(char)
+                continue
             code = ord(char)
             # Keep Korean characters
             if (0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
@@ -86,10 +88,12 @@ class AnswerFormatter:
             else:
                 cleaned_chars.append(' ')
 
+        # Collapse spaces per line but preserve line breaks
         result = ''.join(cleaned_chars)
-
-        # Clean up multiple spaces
-        result = re.sub(r'\s+', ' ', result)
+        lines = []
+        for ln in result.splitlines(True):  # keepends
+            lines.append(re.sub(r'[ \t]+', ' ', ln))
+        result = ''.join(lines)
 
         # Ensure department names are properly formatted (comma-separated)
         result = re.sub(r'([가-힣]+과)\s+([가-힣]+과)', r'\1, \2', result)
@@ -122,13 +126,7 @@ class AnswerFormatter:
             lines.append(details_text)
             lines.append("")
         
-        # 4. Sources
-        if response.get("sources"):
-            lines.append(f"{self.section_headers['sources']}")
-            for idx, source in enumerate(response["sources"], 1):
-                doc_id = source.get("doc_id", "unknown")
-                page = source.get("page", 0)
-                lines.append(f"  [{idx}] {doc_id}, {page}페이지")
+        # 4. Sources (omit in formatted_text; UI renders structured sources separately)
         
         return "\n".join(lines)
     
