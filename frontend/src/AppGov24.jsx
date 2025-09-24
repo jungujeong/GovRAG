@@ -669,7 +669,7 @@ function AppGov24() {
         <div className="gov24-header-content">
           <div className="gov24-logo">
             <div className="gov24-logo-icon">📋</div>
-            <div className="gov24-logo-text">정부문서 AI</div>
+            <div className="gov24-logo-text">GovRAG Chat</div>
           </div>
           <nav className="gov24-nav">
             <button
@@ -808,7 +808,7 @@ function AppGov24() {
                 {messages.length === 0 && (
                   <div className="gov24-welcome">
                     <div className="gov24-welcome-header">
-                      <h2 className="gov24-welcome-title">정부문서 AI에 오신 것을 환영합니다</h2>
+                      <h2 className="gov24-welcome-title">GovRAG Chat에 오신 것을 환영합니다</h2>
                       <p className="gov24-welcome-text">
                         {documents.length > 0
                           ? "업로드된 문서를 바탕으로 질문해보세요"
