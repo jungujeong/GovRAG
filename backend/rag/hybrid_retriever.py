@@ -51,13 +51,19 @@ class HybridRetriever:
         # Filter by relevance
         filtered_results = self._filter_by_relevance(query, combined_results)
 
+        # Ensure diverse document coverage
+        diverse_results = self._ensure_document_diversity(filtered_results, limit)
+
         # Return top results
-        return filtered_results[:limit]
+        return diverse_results
     
     def _bm25_search(self, query: str, document_ids: Optional[List[str]] = None) -> List[Dict]:
         """Perform BM25 search with optional document filtering"""
         try:
-            results = self.bm25.search(query, limit=config.TOPK_BM25)
+            # Get more results initially to ensure we capture all documents
+            # When filtering by document_ids, get more results to ensure we find mentions in all docs
+            search_limit = config.TOPK_BM25 * 3 if document_ids else config.TOPK_BM25 * 2
+            results = self.bm25.search(query, limit=search_limit)
 
             # Filter by document IDs if provided
             if document_ids:
@@ -100,10 +106,10 @@ class HybridRetriever:
             # Generate query embedding
             query_embedding = self.embedder.encode_query(query)
 
-            # Search in ChromaDB
+            # Search in ChromaDB - get more results to ensure comprehensive coverage
             results = self.chroma.search(
                 query_embedding.tolist(),
-                limit=config.TOPK_VECTOR if not document_ids else config.TOPK_VECTOR * 2
+                limit=config.TOPK_VECTOR * 3 if document_ids else config.TOPK_VECTOR * 2
             )
 
             # Filter by document IDs if provided
@@ -454,10 +460,61 @@ class HybridRetriever:
         number_keywords = [kw for kw in keywords if re.search(r'\d', kw)]
         if not number_keywords:
             return 0.0
-        
+
         matches = 0
         for num_kw in number_keywords:
             if num_kw.lower() in text.lower():
                 matches += 1
-        
+
         return matches / len(number_keywords) if number_keywords else 0.0
+
+    def _ensure_document_diversity(self, results: List[Dict], limit: int) -> List[Dict]:
+        """Ensure results include diverse documents to capture all mentions"""
+        if not results:
+            return []
+
+        # Group results by document
+        doc_groups = defaultdict(list)
+        for result in results:
+            doc_id = result.get("doc_id", "unknown")
+            doc_groups[doc_id].append(result)
+
+        # Sort each document group by score
+        for doc_id in doc_groups:
+            doc_groups[doc_id].sort(
+                key=lambda x: x.get("rrf_score", 0) + x.get("keyword_relevance", 0),
+                reverse=True
+            )
+
+        # Build diverse results
+        diverse_results = []
+
+        # First pass: Add top result from each document
+        for doc_id in sorted(doc_groups.keys()):
+            if doc_groups[doc_id]:
+                diverse_results.append(doc_groups[doc_id][0])
+                if len(diverse_results) >= limit:
+                    break
+
+        # Second pass: Add remaining results by score
+        if len(diverse_results) < limit:
+            remaining = []
+            for doc_id in doc_groups:
+                # Skip already added results
+                remaining.extend(doc_groups[doc_id][1:])
+
+            # Sort remaining by combined score
+            remaining.sort(
+                key=lambda x: x.get("rrf_score", 0) + x.get("keyword_relevance", 0),
+                reverse=True
+            )
+
+            # Add best remaining results
+            for result in remaining:
+                if len(diverse_results) >= limit:
+                    break
+                diverse_results.append(result)
+
+        logger.info(f"Document diversity: {len(doc_groups)} unique documents in {len(diverse_results)} results")
+
+        return diverse_results

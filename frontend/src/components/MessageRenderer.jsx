@@ -149,23 +149,31 @@ function MessageRenderer({ message, onCitationClick }) {
   
   // 어시스턴트 메시지
   if (message.role === 'assistant') {
-    // 완료된 메시지는 구조화된 답변으로 표시
-    if (message.isComplete && (message.sources || message.key_facts)) {
+    const metadata = message.metadata || {}
+    const formattedText = metadata.formatted_text || message.formatted_text || message.content
+    const rawAnswer = metadata.raw_answer || message.raw_answer || message.content
+    const keyFacts = Array.isArray(metadata.key_facts) ? metadata.key_facts : (message.key_facts || [])
+    const details = metadata.details ?? message.details ?? ''
+    const sources = Array.isArray(message.sources) ? message.sources : []
+    const hasStructured = !message.streaming && (formattedText || rawAnswer || keyFacts.length > 0 || details || sources.length > 0)
+
+    if (hasStructured) {
       return (
-        <StructuredAnswer 
+        <StructuredAnswer
           answer={{
-            answer: message.content,
-            key_facts: message.key_facts || [],
-            details: message.details || '',
-            sources: message.sources || []
+            answer: rawAnswer,
+            formatted_text: formattedText,
+            key_facts: keyFacts,
+            details,
+            sources,
+            metadata
           }}
           onCitationClick={onCitationClick}
           compact={true}
         />
       )
     }
-    
-    // 스트리밍 중이거나 일반 텍스트
+
     return (
       <div className="message-content">
         {renderMarkdown(message.content)}

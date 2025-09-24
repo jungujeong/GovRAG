@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import './styles/MediumDesign.css'
 import DocumentDetailsPopup from './components/DocumentDetailsPopup'
 import CitationPopup from './components/CitationPopup'
+import AnswerWithCitations from './components/AnswerWithCitations'
 import { chatAPI } from './services/chatAPI'
 
 // Configure axios defaults
@@ -55,10 +56,21 @@ function AppMediumClean() {
   
   // Initialize
   useEffect(() => {
+    console.log('AppMediumClean component mounted')
     const init = async () => {
-      await checkHealth()
-      await loadDocuments()  // 먼저 문서를 로드
-      await loadSessionsWithDeviceId()   // 디바이스별 세션 로드
+      try {
+        console.log('Starting initialization...')
+        await checkHealth()
+        console.log('Health check completed')
+        await loadDocuments()  // 먼저 문서를 로드
+        console.log('Documents loaded')
+        await loadSessionsWithDeviceId()   // 디바이스별 세션 로드
+        console.log('Sessions loaded')
+        console.log('Initialization complete')
+      } catch (error) {
+        console.error('Initialization error:', error)
+        setError('초기화 중 오류가 발생했습니다.')
+      }
     }
     init()
   }, [])
@@ -90,7 +102,7 @@ function AppMediumClean() {
       sessionStorage.removeItem('wasLoadingBeforeUnload')
       sessionStorage.removeItem('interruptedSessionId')
     }
-  }, [currentSessionId, messages, handledRefreshInterrupt])
+  }, [currentSessionId, handledRefreshInterrupt])
   
   // Handle page refresh/unload
   useEffect(() => {
@@ -124,10 +136,14 @@ function AppMediumClean() {
     }
   }, [isLoading, abortController, currentSessionId])
   
-  // Auto scroll
+  // Auto scroll and persist messages
   useEffect(() => {
     scrollToBottom()
-  }, [messages])
+    // Save messages to localStorage for session persistence
+    if (currentSessionId && messages.length > 0) {
+      localStorage.setItem(`messages_${currentSessionId}`, JSON.stringify(messages))
+    }
+  }, [messages, currentSessionId])
   
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -217,6 +233,19 @@ function AppMediumClean() {
       const lastSessionId = localStorage.getItem('lastSessionId')
       if (lastSessionId && response.data.sessions.some(s => s.id === lastSessionId)) {
         setCurrentSessionId(lastSessionId)
+
+        // localStorage에서 저장된 메시지 먼저 복원
+        const savedMessages = localStorage.getItem(`messages_${lastSessionId}`)
+        if (savedMessages) {
+          try {
+            const parsedMessages = JSON.parse(savedMessages)
+            setMessages(parsedMessages)
+            console.log('Restored messages from localStorage')
+          } catch (e) {
+            console.error('Failed to parse saved messages:', e)
+          }
+        }
+
         await loadSessionMessages(lastSessionId)
       } else if (response.data.sessions.length > 0) {
         const firstSession = response.data.sessions[0]
@@ -354,8 +383,23 @@ function AppMediumClean() {
         }
         return true
       })
-      
-      setMessages(filteredMessages)
+
+      const normalizedMessages = filteredMessages.map(msg => {
+        const formattedText = msg?.metadata?.formatted_text
+        const normalizedSources = Array.isArray(msg?.sources)
+          ? msg.sources
+          : Array.isArray(msg?.metadata?.sources)
+            ? msg.metadata.sources
+            : []
+
+        return {
+          ...msg,
+          content: formattedText || msg.content,
+          sources: normalizedSources,
+        }
+      })
+
+      setMessages(normalizedMessages)
     } catch (error) {
       console.error('Failed to load session messages:', error)
       setMessages([])
@@ -498,8 +542,9 @@ function AppMediumClean() {
             updated[i] = {
               ...updated[i],
               streaming: false,
-              content: finalResponse.answer || updated[i].content || '응답을 생성할 수 없습니다.',
-              sources: finalResponse.sources || []
+              content: finalResponse.metadata?.formatted_text || finalResponse.answer || updated[i].content || '응답을 생성할 수 없습니다.',
+              sources: Array.isArray(finalResponse.sources) ? finalResponse.sources : [],
+              metadata: finalResponse.metadata || updated[i].metadata
             }
             break
           }
@@ -860,8 +905,6 @@ function AppMediumClean() {
             {/* Content */}
             <div className="medium-content">
               <div className="medium-messages">
-                {(() => { /* 상태: 스트리밍 메시지 존재 여부 */ })()}
-                
                 {documents.length === 0 && messages.length === 0 && (
                   <div className="medium-empty-state">
                     <h2 className="medium-empty-title">시작하기</h2>
@@ -882,37 +925,47 @@ function AppMediumClean() {
                     <div className="medium-message-content">
                       {msg.content && (
                         <div className="medium-message-text">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              p: ({children}) => {
-                                // Handle section headers
-                                const text = typeof children === 'string' ? children : ''
-                                if (text.includes('핵심 답변')) {
-                                  return <h3 className="medium-answer-header">{text.replace(/[📌]/g, '')}</h3>
-                                } else if (text.includes('주요 사실')) {
-                                  return <h4 className="medium-facts-header">{text.replace(/[📊]/g, '')}</h4>
-                                } else if (text.includes('상세 설명')) {
-                                  return <h4 className="medium-details-header">{text.replace(/[📝]/g, '')}</h4>
-                                } else if (text.includes('출처')) {
-                                  const hasSources = Array.isArray(msg.sources) && msg.sources.length > 0
-                                  if (hasSources) return null
-                                  return <h4 className="medium-sources-header">{text.replace(/[📚]/g, '')}</h4>
-                                }
-                                return <p className="medium-paragraph">{children}</p>
-                              },
-                              strong: ({children}) => <strong className="medium-bold">{children}</strong>,
-                              em: ({children}) => <em className="medium-italic">{children}</em>,
-                              ul: ({children}) => <ul className="medium-list">{children}</ul>,
-                              ol: ({children}) => <ol className="medium-ordered-list">{children}</ol>,
-                              li: ({children}) => <li className="medium-fact-item">{children}</li>,
-                              h1: ({children}) => <h3 className="medium-heading">{children}</h3>,
-                              h2: ({children}) => <h3 className="medium-heading">{children}</h3>,
-                              h3: ({children}) => <h3 className="medium-heading">{children}</h3>,
-                            }}
-                          >
-                            {msg.content}
-                          </ReactMarkdown>
+                          {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 ? (
+                            // Use AnswerWithCitations for assistant messages with sources
+                            <AnswerWithCitations
+                              content={msg.content}
+                              sources={msg.sources}
+                              onCitationClick={handleShowSource}
+                            />
+                          ) : (
+                            // Use regular ReactMarkdown for other messages
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                p: ({children}) => {
+                                  // Handle section headers
+                                  const text = typeof children === 'string' ? children : ''
+                                  if (text.includes('핵심 답변')) {
+                                    return <h3 className="medium-answer-header">{text.replace(/[📌]/g, '')}</h3>
+                                  } else if (text.includes('주요 사실')) {
+                                    return <h4 className="medium-facts-header">{text.replace(/[📊]/g, '')}</h4>
+                                  } else if (text.includes('상세 설명')) {
+                                    return <h4 className="medium-details-header">{text.replace(/[📝]/g, '')}</h4>
+                                  } else if (text.includes('출처')) {
+                                    const hasSources = Array.isArray(msg.sources) && msg.sources.length > 0
+                                    if (hasSources) return null
+                                    return <h4 className="medium-sources-header">{text.replace(/[📚]/g, '')}</h4>
+                                  }
+                                  return <p className="medium-paragraph">{children}</p>
+                                },
+                                strong: ({children}) => <strong className="medium-bold">{children}</strong>,
+                                em: ({children}) => <em className="medium-italic">{children}</em>,
+                                ul: ({children}) => <ul className="medium-list">{children}</ul>,
+                                ol: ({children}) => <ol className="medium-ordered-list">{children}</ol>,
+                                li: ({children}) => <li className="medium-fact-item">{children}</li>,
+                                h1: ({children}) => <h3 className="medium-heading">{children}</h3>,
+                                h2: ({children}) => <h3 className="medium-heading">{children}</h3>,
+                                h3: ({children}) => <h3 className="medium-heading">{children}</h3>,
+                              }}
+                            >
+                              {msg.content}
+                            </ReactMarkdown>
+                          )}
                         </div>
                       )}
 
@@ -924,25 +977,49 @@ function AppMediumClean() {
                         </div>
                       )}
 
-                      {/* sources 배열이 있으면 항상 출처 섹션 표시 */}
-                      {msg.sources && msg.sources.length > 0 && (() => {
+                      {/* sources 배열이 있으면 항상 출처 섹션 표시 - AnswerWithCitations를 사용하지 않는 경우에만 */}
+                      {false && msg.sources && msg.sources.length > 0 && (() => {
                         // 중복 출처 제거 (문서+페이지+오프셋 기준)
                         const keyOf = (s) => `${s.doc_id || s.document || ''}-${s.page || ''}-${s.start || s.start_char || ''}-${s.end || s.end_char || ''}`
                         const uniqueSources = Array.from(new Map((msg.sources || []).map(s => [keyOf(s), s])).values())
                         return (
                         <div className="medium-sources-section">
-                          <h4 className="medium-sources-title">📚 출처</h4>
+                          <h4 className="medium-sources-title">📚 출처 (클릭하여 상세 정보 확인)</h4>
                           <div className="medium-sources-list">
-                            {uniqueSources.map((source, sourceIdx) => (
-                              <button
-                                key={sourceIdx}
-                                className="medium-source-button"
-                                onClick={() => handleShowSource(source)}
-                              >
-                                [{sourceIdx + 1}] {source.doc_id || source.document}
-                                {source.page && ` - ${source.page}페이지`}
-                              </button>
-                            ))}
+                            {uniqueSources.map((source, sourceIdx) => {
+                              const displayIndex = source.display_index || source.index || (sourceIdx + 1)
+                              return (
+                                <button
+                                  key={`source-${sourceIdx}`}
+                                  className="medium-source-button"
+                                  onClick={() => {
+                                    console.log('Source clicked:', source)
+                                    handleShowSource(source)
+                                  }}
+                                  title="클릭하여 상세 정보 보기"
+                                  style={{
+                                    textDecoration: 'underline',
+                                    color: '#1a73e8',
+                                    cursor: 'pointer',
+                                    padding: '4px 8px',
+                                    margin: '2px',
+                                    borderRadius: '4px',
+                                    transition: 'background-color 0.2s',
+                                    ':hover': {
+                                      backgroundColor: '#f0f7ff'
+                                    }
+                                  }}
+                                >
+                                  🔗 [{displayIndex}] {source.doc_id || source.document || '문서'}
+                                  {source.page && ` - ${source.page}페이지`}
+                                  {source.text_snippet && (
+                                    <span style={{fontSize: '0.9em', color: '#666', marginLeft: '8px'}}>
+                                      → 클릭하여 원문 보기
+                                    </span>
+                                  )}
+                                </button>
+                              )
+                            })}
                           </div>
                         </div>
                         )

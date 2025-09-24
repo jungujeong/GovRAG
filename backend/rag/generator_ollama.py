@@ -240,11 +240,14 @@ class OllamaGenerator:
         
         return None
     
-    async def generate_with_context(self,
-                                   query: str,
-                                   evidences: List[Dict],
-                                   context: Optional[List[Dict]] = None,
-                                   stream: bool = False) -> Dict:
+    async def generate_with_context(
+        self,
+        query: str,
+        evidences: List[Dict],
+        context: Optional[List[Dict]] = None,
+        doc_scope: Optional[Dict] = None,
+        stream: bool = False,
+    ) -> Dict:
         """Generate response with conversation context"""
 
         # 항상 컨텍스트를 포함하여 LLM이 질문 유형을 판단하도록 함
@@ -252,7 +255,13 @@ class OllamaGenerator:
 
         # Format prompt with context - 항상 컨텍스트 포함
         system_prompt = PromptTemplates.get_system_prompt(evidences)
-        user_prompt = PromptTemplates.format_user_prompt(query, evidences, context, is_meta_query=False)
+        user_prompt = PromptTemplates.format_user_prompt(
+            query,
+            evidences,
+            context,
+            is_meta_query=False,
+            doc_scope_metadata=doc_scope,
+        )
 
         # Build message list - 시스템 프롬프트와 사용자 프롬프트만 사용
         # 컨텍스트는 user_prompt에 이미 포함되어 있음
@@ -280,11 +289,14 @@ class OllamaGenerator:
             logger.error(f"Generation with context failed: {e}")
             raise
 
-    async def stream_with_context(self,
-                                 query: str,
-                                 evidences: List[Dict],
-                                 context: Optional[List[Dict]] = None,
-                                 cancel_event: Optional[asyncio.Event] = None) -> AsyncIterator[str]:
+    async def stream_with_context(
+        self,
+        query: str,
+        evidences: List[Dict],
+        context: Optional[List[Dict]] = None,
+        doc_scope: Optional[Dict] = None,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> AsyncIterator[str]:
         """Stream response with conversation context"""
 
         # 항상 컨텍스트를 포함하여 LLM이 질문 유형을 판단하도록 함
@@ -292,7 +304,22 @@ class OllamaGenerator:
 
         # Format prompt with context - 항상 컨텍스트 포함
         system_prompt = PromptTemplates.get_system_prompt(evidences)
-        user_prompt = PromptTemplates.format_user_prompt(query, evidences, context, is_meta_query=False)
+        user_prompt = PromptTemplates.format_user_prompt(
+            query,
+            evidences,
+            context,
+            is_meta_query=False,
+            doc_scope_metadata=doc_scope,
+        )
+
+        # DEBUG: Log the exact prompts being sent
+        logger.info("="*80)
+        logger.info("DEBUG: EXACT PROMPT BEING SENT TO OLLAMA")
+        logger.info("="*80)
+        logger.info(f"System Prompt:\n{system_prompt[:500]}...")
+        logger.info("-"*40)
+        logger.info(f"User Prompt:\n{user_prompt[:1000]}...")
+        logger.info("="*80)
 
         # Build message list - 시스템 프롬프트와 사용자 프롬프트만 사용
         # 컨텍스트는 user_prompt에 이미 포함되어 있음
@@ -320,6 +347,9 @@ class OllamaGenerator:
                 ) as response:
                     response.raise_for_status()
 
+                    # DEBUG: Collect raw response for logging
+                    raw_response_parts = []
+
                     async for line in response.aiter_lines():
                         # Check cancellation
                         if cancel_event and cancel_event.is_set():
@@ -329,9 +359,20 @@ class OllamaGenerator:
                             try:
                                 data = json.loads(line)
                                 if data.get("message", {}).get("content"):
-                                    yield data["message"]["content"]
+                                    content = data["message"]["content"]
+                                    raw_response_parts.append(content)
+                                    yield content
                             except json.JSONDecodeError:
                                 continue
+
+                    # DEBUG: Log the complete raw response
+                    if raw_response_parts:
+                        full_raw_response = ''.join(raw_response_parts)
+                        logger.info("="*80)
+                        logger.info("DEBUG: RAW MODEL RESPONSE FROM OLLAMA")
+                        logger.info("="*80)
+                        logger.info(f"{full_raw_response[:2000]}...")
+                        logger.info("="*80)
 
         except Exception as e:
             logger.error(f"Stream generation with context failed: {e}")
