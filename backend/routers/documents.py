@@ -6,6 +6,13 @@ import logging
 
 from config import config
 from processors.indexer import DocumentIndexer
+# Import document summarizer (safe import)
+try:
+    from services.document_summarizer import DocumentSummarizer
+    SUMMARIZER_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Document summarizer not available: {e}")
+    SUMMARIZER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +20,16 @@ router = APIRouter()
 
 # Initialize indexer
 indexer = DocumentIndexer()
+
+# Initialize summarizer (safe initialization)
+if SUMMARIZER_AVAILABLE:
+    try:
+        summarizer = DocumentSummarizer()
+    except Exception as e:
+        logger.warning(f"Failed to initialize summarizer: {e}")
+        summarizer = None
+else:
+    summarizer = None
 
 @router.post("/upload")
 async def upload_document(
@@ -558,5 +575,142 @@ async def get_document_detail(filename: str) -> Dict:
             
     except Exception as e:
         logger.warning(f"Could not load directive processing results: {e}")
-    
+
     return doc_info
+
+
+# Summary API endpoints (new feature - safe addition)
+@router.get("/{doc_id}/summary")
+async def get_document_summary(doc_id: str) -> Dict:
+    """Get summary for a document"""
+    if not summarizer:
+        raise HTTPException(
+            status_code=503,
+            detail="Document summarizer service is not available"
+        )
+
+    try:
+        # Get existing summary
+        summary_data = await summarizer.get_summary(doc_id)
+
+        if not summary_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No summary found for document: {doc_id}"
+            )
+
+        return {
+            "status": "success",
+            "data": summary_data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get summary for {doc_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve summary: {str(e)}"
+        )
+
+
+@router.post("/{doc_id}/summary")
+async def generate_document_summary(doc_id: str) -> Dict:
+    """Generate or regenerate summary for a document"""
+    if not summarizer:
+        raise HTTPException(
+            status_code=503,
+            detail="Document summarizer service is not available"
+        )
+
+    try:
+        # Find document file
+        doc_path = None
+        for ext in ['.pdf', '.hwp']:
+            potential_path = Path(config.DOC_DIR) / f"{doc_id}{ext}"
+            if potential_path.exists():
+                doc_path = potential_path
+                break
+
+        if not doc_path:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document file not found for: {doc_id}"
+            )
+
+        # Generate summary
+        summary_data = await summarizer.generate_summary(doc_path, doc_id)
+
+        return {
+            "status": "success",
+            "data": summary_data,
+            "message": "Summary generated successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate summary for {doc_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate summary: {str(e)}"
+        )
+
+
+@router.delete("/{doc_id}/summary")
+async def delete_document_summary(doc_id: str) -> Dict:
+    """Delete summary for a document"""
+    if not summarizer:
+        raise HTTPException(
+            status_code=503,
+            detail="Document summarizer service is not available"
+        )
+
+    try:
+        success = await summarizer.delete_summary(doc_id)
+
+        if success:
+            return {
+                "status": "success",
+                "message": f"Summary deleted for document: {doc_id}"
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to delete summary"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete summary for {doc_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete summary: {str(e)}"
+        )
+
+
+@router.get("/summaries/list")
+async def list_all_summaries() -> Dict:
+    """List all available document summaries"""
+    if not summarizer:
+        raise HTTPException(
+            status_code=503,
+            detail="Document summarizer service is not available"
+        )
+
+    try:
+        summaries = await summarizer.list_summaries()
+
+        return {
+            "status": "success",
+            "data": summaries,
+            "total": len(summaries)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list summaries: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list summaries: {str(e)}"
+        )

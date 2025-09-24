@@ -1,18 +1,20 @@
 import React, { useState } from 'react'
 import axios from 'axios'
 import DocumentDetail from './DocumentDetail'
+import SummaryPopup from './SummaryPopup'
 
 function DocumentManager({ documents, onRefresh }) {
   const [isDeleting, setIsDeleting] = useState(false)
   const [selectedDoc, setSelectedDoc] = useState(null)
+  const [summaryDoc, setSummaryDoc] = useState(null) // For summary popup
   
   const handleDelete = async (filename) => {
     if (!window.confirm(`정말로 "${filename}"을 삭제하시겠습니까?`)) {
       return
     }
-    
+
     setIsDeleting(true)
-    
+
     try {
       await axios.delete(`/api/documents/${filename}`)
       alert('문서가 삭제되었습니다.')
@@ -23,6 +25,21 @@ function DocumentManager({ documents, onRefresh }) {
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  // Handle summary popup
+  const handleShowSummary = (doc) => {
+    // Extract document ID (filename without extension)
+    const docId = doc.filename.replace(/\.[^/.]+$/, "")
+    setSummaryDoc({
+      id: docId,
+      name: doc.filename,
+      ...doc
+    })
+  }
+
+  const handleCloseSummary = () => {
+    setSummaryDoc(null)
   }
   
   const handleReindex = async () => {
@@ -182,9 +199,19 @@ function DocumentManager({ documents, onRefresh }) {
                         >
                           상세
                         </button>
-                        
+
                         <span className="text-gray-300">|</span>
-                        
+
+                        <button
+                          onClick={() => handleShowSummary(doc)}
+                          className="text-green-600 hover:text-green-800 text-lg font-medium"
+                          title="문서 요약 보기"
+                        >
+                          요약
+                        </button>
+
+                        <span className="text-gray-300">|</span>
+
                         <button
                           onClick={() => handleDelete(doc.filename)}
                           disabled={isDeleting}
@@ -204,9 +231,19 @@ function DocumentManager({ documents, onRefresh }) {
       
       {/* Document Details Modal */}
       {selectedDoc && (
-        <DocumentDetail 
-          document={selectedDoc} 
-          onClose={() => setSelectedDoc(null)} 
+        <DocumentDetail
+          document={selectedDoc}
+          onClose={() => setSelectedDoc(null)}
+        />
+      )}
+
+      {/* Summary Popup Modal */}
+      {summaryDoc && (
+        <SummaryPopup
+          isOpen={true}
+          documentId={summaryDoc.id}
+          documentName={summaryDoc.name}
+          onClose={handleCloseSummary}
         />
       )}
     </div>
