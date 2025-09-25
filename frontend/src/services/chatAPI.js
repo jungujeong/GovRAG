@@ -106,6 +106,7 @@ class ChatAPI {
       sources: [],
       metadata: {}
     }
+    let errorMessage = null
     
     try {
       while (true) {
@@ -118,39 +119,49 @@ class ChatAPI {
         buffer = lines.pop() // Keep incomplete line in buffer
         
         for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const data = JSON.parse(line)
-              
-              if (data.error) {
-                throw new Error(data.message || data.error)
-              }
-              
-              if (data.status) {
-                // Status update
-                onStream(data.status)
-              } else if (data.content) {
-                // Content chunk
-                finalResponse.answer += data.content
-                onStream(data.content)
-              } else if (data.complete) {
-                // Completion with final answer and sources
-                if (typeof data.answer === 'string') {
-                  finalResponse.answer = data.answer
-                }
-                finalResponse.sources = data.sources || []
-                finalResponse.metadata = data.metadata || {}
-              }
-            } catch (e) {
-              console.error('Failed to parse streaming data:', e)
-            }
+          if (!line.trim()) {
+            continue
           }
+
+          try {
+            const data = JSON.parse(line)
+
+            if (data.error) {
+              errorMessage = data.message || data.error
+              finalResponse.answer = errorMessage
+              finalResponse.metadata = { ...finalResponse.metadata, error: errorMessage }
+              break
+            }
+
+            if (data.status) {
+              onStream(data.status)
+            } else if (typeof data.content === 'string') {
+              finalResponse.answer += data.content
+              onStream(data.content)
+            } else if (data.complete) {
+              if (typeof data.answer === 'string') {
+                finalResponse.answer = data.answer
+              }
+              finalResponse.sources = Array.isArray(data.sources) ? data.sources : []
+              finalResponse.metadata = data.metadata || {}
+            }
+          } catch (e) {
+            console.error('Failed to parse streaming data:', e)
+          }
+        }
+
+        if (errorMessage) {
+          break
         }
       }
     } finally {
       reader.releaseLock()
     }
     
+    if (errorMessage) {
+      return finalResponse
+    }
+
     return finalResponse
   }
   
