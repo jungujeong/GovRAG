@@ -90,61 +90,45 @@ class ResponsePostProcessor:
         """Fix entity name variations"""
         from difflib import SequenceMatcher
 
-        # Extract entities from both texts (improved pattern)
         entity_pattern = r'[가-힣A-Za-z][가-힣A-Za-z\d]{2,}'
-        text_entities = re.findall(entity_pattern, text)
-        evidence_entities = re.findall(entity_pattern, evidence_text)
+        text_entities = set(re.findall(entity_pattern, text))
+        evidence_entities = set(re.findall(entity_pattern, evidence_text))
 
-        # Build unique sets
-        unique_text_entities = set(text_entities)
-        unique_evidence_entities = set(evidence_entities)
+        normalized_evidence = {
+            self._normalize_entity(e): e for e in evidence_entities
+        }
 
-        # Build replacement map
-        replacements = {}
+        for entity in text_entities:
+            norm_entity = self._normalize_entity(entity)
+            if not norm_entity:
+                # Remove non-Korean entities
+                text = re.sub(rf'\b{re.escape(entity)}\b', '', text)
+                continue
 
-        for text_entity in unique_text_entities:
-            if text_entity not in unique_evidence_entities:
-                # Find best match
-                best_match = None
-                best_score = 0
+            if norm_entity in normalized_evidence:
+                canonical = normalized_evidence[norm_entity]
+                if entity != canonical:
+                    logger.info("Canonicalizing entity '%s' → '%s'", entity, canonical)
+                    text = re.sub(rf'\b{re.escape(entity)}\b', canonical, text)
+                continue
 
-                for evid_entity in unique_evidence_entities:
-                    # Skip if too different in length
-                    if abs(len(text_entity) - len(evid_entity)) > 3:
-                        continue
+            # Find closest match
+            best_match = None
+            best_score = 0.0
+            for evid_norm, evid_entity in normalized_evidence.items():
+                if not evid_norm:
+                    continue
+                score = SequenceMatcher(None, norm_entity, evid_norm).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_match = evid_entity
 
-                    # Calculate similarity
-                    sim = SequenceMatcher(None, text_entity, evid_entity).ratio()
-
-                    # Check for common prefix (important for Korean compounds)
-                    common_prefix_len = 0
-                    for i, (c1, c2) in enumerate(zip(text_entity, evid_entity)):
-                        if c1 == c2:
-                            common_prefix_len += 1
-                        else:
-                            break
-
-                    # Weighted score
-                    if common_prefix_len >= 2:  # At least 2 chars in common at start
-                        weighted_sim = sim * 0.7 + (common_prefix_len / len(text_entity)) * 0.3
-                    else:
-                        weighted_sim = sim
-
-                    # If very similar but not exact
-                    if 0.7 < weighted_sim < 1.0 and weighted_sim > best_score:
-                        best_score = weighted_sim
-                        best_match = evid_entity
-
-                if best_match and best_score > 0.75:
-                    replacements[text_entity] = best_match
-                    logger.info(f"Will replace '{text_entity}' with '{best_match}' (score: {best_score:.2f})")
-
-        # Apply replacements (careful with word boundaries)
-        for old, new in replacements.items():
-            # Use lookahead/lookbehind for Korean word boundaries
-            pattern = f'(?<![가-힣]){re.escape(old)}(?![가-힣])'
-            text = re.sub(pattern, new, text)
-            logger.info(f"Applied replacement: {old} → {new}")
+            if best_match and best_score >= 0.8:
+                logger.info("Replacing entity '%s' with '%s' (score %.2f)", entity, best_match, best_score)
+                text = re.sub(rf'\b{re.escape(entity)}\b', best_match, text)
+            else:
+                logger.info("Removing unsupported entity '%s' (score %.2f)", entity, best_score)
+                text = re.sub(rf'\b{re.escape(entity)}\b', '', text)
 
         return text
 
@@ -167,7 +151,7 @@ class ResponsePostProcessor:
                 continue
 
             coverage = self._line_coverage(stripped, evidence_norm)
-            if coverage >= 0.25 or not kept_any:
+            if coverage >= 0.35 or not kept_any:
                 filtered.append(line)
                 if stripped:
                     kept_any = True
@@ -190,3 +174,6 @@ class ResponsePostProcessor:
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r'\s+', ' ', text).lower().strip()
+
+    def _normalize_entity(self, entity: str) -> str:
+        return re.sub(r'[^가-힣]', '', entity)
