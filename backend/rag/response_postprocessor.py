@@ -4,7 +4,6 @@ Main entry point for all response corrections
 """
 
 import logging
-import re
 from typing import Dict, List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -53,6 +52,8 @@ class ResponsePostProcessor:
 
     def _clean_text(self, text: str, evidence_text: str) -> str:
         """Clean text by removing hallucinated content"""
+        import re
+
         # Remove parenthetical additions not in evidence
         text = self._remove_fake_parentheticals(text, evidence_text)
 
@@ -63,6 +64,8 @@ class ResponsePostProcessor:
 
     def _remove_fake_parentheticals(self, text: str, evidence_text: str) -> str:
         """Remove parenthetical content not in evidence"""
+        import re
+
         # More robust pattern for Korean entities with parentheses
         pattern = r'([가-힣]+(?:[가-힣\d]*)?)\s*\(([^)]+)\)'
 
@@ -88,6 +91,7 @@ class ResponsePostProcessor:
 
     def _fix_entity_names(self, text: str, evidence_text: str) -> str:
         """Fix entity name variations"""
+        import re
         from difflib import SequenceMatcher
 
         # Extract entities from both texts (improved pattern)
@@ -147,46 +151,3 @@ class ResponsePostProcessor:
             logger.info(f"Applied replacement: {old} → {new}")
 
         return text
-
-    def _filter_sentences_by_evidence(self, text: str, evidence_text: str) -> str:
-        if not text:
-            return text
-
-        evidence_norm = self._normalize_text(evidence_text)
-        if not evidence_norm:
-            return text
-
-        lines = text.split('\n')
-        filtered: List[str] = []
-        kept_any = False
-
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                filtered.append(line)
-                continue
-
-            coverage = self._line_coverage(stripped, evidence_norm)
-            if coverage >= 0.25 or not kept_any:
-                filtered.append(line)
-                if stripped:
-                    kept_any = True
-            else:
-                logger.info("Dropping low-evidence sentence: '%s' (coverage=%.2f)", stripped[:80], coverage)
-
-        return '\n'.join(filtered)
-
-    def _line_coverage(self, line: str, evidence_norm: str) -> float:
-        tokens = re.findall(r'[가-힣A-Za-z]{2,}', line)
-        if not tokens:
-            return 0.0
-        total = len(tokens)
-        hits = 0
-        for token in tokens:
-            token_norm = self._normalize_text(token)
-            if token_norm and token_norm in evidence_norm:
-                hits += 1
-        return hits / total if total else 0.0
-
-    def _normalize_text(self, text: str) -> str:
-        return re.sub(r'\s+', ' ', text).lower().strip()
