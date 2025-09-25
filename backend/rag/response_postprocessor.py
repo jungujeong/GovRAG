@@ -1,9 +1,11 @@
-"""
-Simple response postprocessor
-Main entry point for all response corrections
+"""Simple response postprocessor
+
+Main entry point for all response corrections.
 """
 
 import logging
+import re
+from difflib import SequenceMatcher
 from typing import Dict, List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -14,6 +16,7 @@ class ResponsePostProcessor:
 
     def __init__(self):
         self.enabled = True
+        self._token_pattern = re.compile(r'[가-힣A-Za-z]{2,}')
 
     def process(
         self,
@@ -52,20 +55,22 @@ class ResponsePostProcessor:
 
     def _clean_text(self, text: str, evidence_text: str) -> str:
         """Clean text by removing hallucinated content"""
-        import re
-
         # Remove parenthetical additions not in evidence
         text = self._remove_fake_parentheticals(text, evidence_text)
 
         # Fix entity variations
         text = self._fix_entity_names(text, evidence_text)
 
+        # Align remaining tokens with evidence vocabulary
+        text = self._harmonize_tokens(text, evidence_text)
+
+        # Normalize whitespace produced by replacements
+        text = re.sub(r'\s{2,}', ' ', text).strip()
+
         return text
 
     def _remove_fake_parentheticals(self, text: str, evidence_text: str) -> str:
         """Remove parenthetical content not in evidence"""
-        import re
-
         # More robust pattern for Korean entities with parentheses
         pattern = r'([가-힣]+(?:[가-힣\d]*)?)\s*\(([^)]+)\)'
 
@@ -90,64 +95,87 @@ class ResponsePostProcessor:
         return text
 
     def _fix_entity_names(self, text: str, evidence_text: str) -> str:
-        """Fix entity name variations"""
-        import re
-        from difflib import SequenceMatcher
-
-        # Extract entities from both texts (improved pattern)
+        """Normalize entity-like tokens to match evidence terminology."""
         entity_pattern = r'[가-힣A-Za-z][가-힣A-Za-z\d]{2,}'
-        text_entities = re.findall(entity_pattern, text)
-        evidence_entities = re.findall(entity_pattern, evidence_text)
+        response_entities = set(re.findall(entity_pattern, text))
+        evidence_entities = set(re.findall(entity_pattern, evidence_text))
 
-        # Build unique sets
-        unique_text_entities = set(text_entities)
-        unique_evidence_entities = set(evidence_entities)
+        if not response_entities or not evidence_entities:
+            return text
 
-        # Build replacement map
-        replacements = {}
+        evidence_index: Dict[str, str] = {}
+        for ent in evidence_entities:
+            norm = self._normalize_entity(ent)
+            if norm:
+                evidence_index.setdefault(norm, ent)
 
-        for text_entity in unique_text_entities:
-            if text_entity not in unique_evidence_entities:
-                # Find best match
-                best_match = None
-                best_score = 0
+        def replacement(match: re.Match) -> str:
+            token = match.group(0)
+            norm = self._normalize_entity(token)
+            if norm in evidence_index:
+                canonical = evidence_index[norm]
+                if canonical != token:
+                    logger.info("Canonicalizing entity '%s' → '%s'", token, canonical)
+                return canonical
 
-                for evid_entity in unique_evidence_entities:
-                    # Skip if too different in length
-                    if abs(len(text_entity) - len(evid_entity)) > 3:
-                        continue
+            # Fallback: find closest evidence entity
+            best_token = None
+            best_score = 0.0
+            for evid_norm, evid_token in evidence_index.items():
+                score = SequenceMatcher(None, norm, evid_norm).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_token = evid_token
+                    if score >= 0.95:
+                        break
 
-                    # Calculate similarity
-                    sim = SequenceMatcher(None, text_entity, evid_entity).ratio()
+            if best_token and best_score >= 0.85:
+                logger.info("Replacing entity '%s' with '%s' (score %.2f)", token, best_token, best_score)
+                return best_token
 
-                    # Check for common prefix (important for Korean compounds)
-                    common_prefix_len = 0
-                    for i, (c1, c2) in enumerate(zip(text_entity, evid_entity)):
-                        if c1 == c2:
-                            common_prefix_len += 1
-                        else:
-                            break
+            logger.info("Removing unsupported entity '%s' (score %.2f)", token, best_score)
+            return ''
 
-                    # Weighted score
-                    if common_prefix_len >= 2:  # At least 2 chars in common at start
-                        weighted_sim = sim * 0.7 + (common_prefix_len / len(text_entity)) * 0.3
-                    else:
-                        weighted_sim = sim
+        return re.sub(entity_pattern, replacement, text)
 
-                    # If very similar but not exact
-                    if 0.7 < weighted_sim < 1.0 and weighted_sim > best_score:
-                        best_score = weighted_sim
-                        best_match = evid_entity
+    def _harmonize_tokens(self, text: str, evidence_text: str) -> str:
+        """Align general tokens with evidence terminology."""
+        tokens = self._token_pattern.findall(text)
+        if not tokens:
+            return text
 
-                if best_match and best_score > 0.75:
-                    replacements[text_entity] = best_match
-                    logger.info(f"Will replace '{text_entity}' with '{best_match}' (score: {best_score:.2f})")
+        evidence_tokens = self._token_pattern.findall(evidence_text)
+        if not evidence_tokens:
+            return text
 
-        # Apply replacements (careful with word boundaries)
-        for old, new in replacements.items():
-            # Use lookahead/lookbehind for Korean word boundaries
-            pattern = f'(?<![가-힣]){re.escape(old)}(?![가-힣])'
-            text = re.sub(pattern, new, text)
-            logger.info(f"Applied replacement: {old} → {new}")
+        evidence_index: Dict[str, str] = {}
+        for token in evidence_tokens:
+            norm = self._normalize_text(token)
+            if norm:
+                evidence_index.setdefault(norm, token)
 
-        return text
+        def repl(match: re.Match) -> str:
+            token = match.group(0)
+            norm = self._normalize_text(token)
+            canonical = evidence_index.get(norm)
+            if canonical:
+                return canonical
+
+            best_token = None
+            best_score = 0.0
+            for evid_norm, evid_token in evidence_index.items():
+                score = SequenceMatcher(None, norm, evid_norm).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_token = evid_token
+                    if score >= 0.95:
+                        break
+
+            if best_token and best_score >= 0.85:
+                logger.info("Token '%s' harmonized to '%s' (score %.2f)", token, best_token, best_score)
+                return best_token
+
+            logger.info("Dropping unsupported token '%s' (score %.2f)", token, best_score)
+            return ''
+
+        return self._token_pattern.sub(repl, text)
