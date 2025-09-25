@@ -16,6 +16,7 @@ from rag.citation_tracker import CitationTracker
 from rag.answer_formatter import AnswerFormatter
 from rag.response_postprocessor import ResponsePostProcessor
 from rag.response_grounder import ResponseGrounder
+from rag.response_validator import ResponseValidator
 from rag.conversation_summarizer import ConversationSummarizer
 from rag.query_rewriter import QueryRewriter, RewriteContext
 from rag.topic_detector import TopicChangeDetector
@@ -51,6 +52,7 @@ title_generator: Optional[TitleGenerator] = None
 topic_detector: Optional[TopicChangeDetector] = None
 grounder: Optional[ResponseGrounder] = None
 doc_scope_resolver: Optional[DocScopeResolver] = None
+response_validator: Optional[ResponseValidator] = None
 
 
 def get_retriever():
@@ -114,6 +116,13 @@ def get_doc_scope_resolver() -> DocScopeResolver:
     if doc_scope_resolver is None:
         doc_scope_resolver = DocScopeResolver(get_topic_detector())
     return doc_scope_resolver
+
+
+def get_response_validator() -> ResponseValidator:
+    global response_validator
+    if response_validator is None:
+        response_validator = ResponseValidator()
+    return response_validator
 
 
 def _deduplicate_doc_ids(doc_ids: Optional[List[str]]) -> List[str]:
@@ -795,7 +804,12 @@ async def send_message(
             
             # 4. Ground and verify response (respect resolved scope)
             response = get_response_grounder().ground(response, evidences)
-            response = postprocessor.process(response, evidences)
+            response = postprocessor.process(response, evidences, query=request.query)
+
+            response_validator = get_response_validator()
+            response, validation_issues = response_validator.validate_and_correct(response, evidences)
+            if validation_issues:
+                logger.info("Response validator issues: %s", validation_issues[:5])
 
             # 4.1 생성된 response에서 sources 강제 필터링
             if allowed_docs_enforce and "sources" in response:
@@ -1400,7 +1414,12 @@ async def send_message_stream(
             }
 
             response_payload = get_response_grounder().ground(response_payload, evidences)
-            response_payload = postprocessor.process(response_payload, evidences)
+            response_payload = postprocessor.process(response_payload, evidences, query=request.query)
+
+            response_validator = get_response_validator()
+            response_payload, validation_issues = response_validator.validate_and_correct(response_payload, evidences)
+            if validation_issues:
+                logger.info("Response validator (stream) issues: %s", validation_issues[:5])
             response_payload = enforcer.enforce_evidence(
                 response_payload,
                 evidences,

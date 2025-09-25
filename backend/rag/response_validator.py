@@ -178,8 +178,8 @@ class ResponseValidator:
 
     def _extract_entities(self, text: str) -> List[str]:
         """Extract potential entity names from text"""
-        # Extract Korean compound nouns (3+ characters)
-        pattern = r'[가-힣]{3,}(?:[가-힣\d]+)?'
+        # Extract words containing Korean and alpha characters (3+ chars)
+        pattern = r'[가-힣A-Za-z][가-힣A-Za-z\d]{2,}'
         entities = re.findall(pattern, text)
 
         # Filter out common words (would need a proper Korean stopword list)

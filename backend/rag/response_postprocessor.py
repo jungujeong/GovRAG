@@ -4,7 +4,7 @@ Main entry point for all response corrections
 """
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,8 @@ class ResponsePostProcessor:
     def process(
         self,
         response: Dict,
-        evidences: List[Dict]
+        evidences: List[Dict],
+        query: Optional[str] = None
     ) -> Dict:
         """
         Process and clean response based on evidences
@@ -94,7 +95,7 @@ class ResponsePostProcessor:
         from difflib import SequenceMatcher
 
         # Extract entities from both texts (improved pattern)
-        entity_pattern = r'[가-힣]{3,}(?:[가-힣\d]+)?'
+        entity_pattern = r'[가-힣A-Za-z][가-힣A-Za-z\d]{2,}'
         text_entities = re.findall(entity_pattern, text)
         evidence_entities = re.findall(entity_pattern, evidence_text)
 
