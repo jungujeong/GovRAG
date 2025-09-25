@@ -795,7 +795,7 @@ async def send_message(
             
             # 4. Ground and verify response (respect resolved scope)
             response = get_response_grounder().ground(response, evidences)
-            response = postprocessor.process(response, evidences, query=request.query)
+            response = postprocessor.process(response, evidences)
 
             # 4.1 생성된 response에서 sources 강제 필터링
             if allowed_docs_enforce and "sources" in response:
@@ -1400,7 +1400,7 @@ async def send_message_stream(
             }
 
             response_payload = get_response_grounder().ground(response_payload, evidences)
-            response_payload = postprocessor.process(response_payload, evidences, query=request.query)
+            response_payload = postprocessor.process(response_payload, evidences)
             response_payload = enforcer.enforce_evidence(
                 response_payload,
                 evidences,
