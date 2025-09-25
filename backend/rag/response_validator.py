@@ -7,7 +7,6 @@ import re
 import logging
 from typing import Dict, List, Tuple, Optional
 from difflib import SequenceMatcher
-import Levenshtein
 
 logger = logging.getLogger(__name__)
 
@@ -213,9 +212,8 @@ class ResponseValidator:
             # 1. Sequence similarity
             seq_sim = SequenceMatcher(None, target, candidate).ratio()
 
-            # 2. Levenshtein distance (normalized)
-            lev_dist = Levenshtein.distance(target, candidate)
-            lev_sim = 1 - (lev_dist / max(len(target), len(candidate)))
+            # 2. Character n-gram overlap (bigram Jaccard)
+            ngram_sim = self._char_ngram_similarity(target, candidate)
 
             # 3. Prefix similarity (important for Korean compounds)
             prefix_len = len(self._common_prefix(target, candidate))
@@ -223,8 +221,8 @@ class ResponseValidator:
 
             # Weighted combination
             combined_score = (
-                seq_sim * 0.4 +
-                lev_sim * 0.4 +
+                seq_sim * 0.5 +
+                ngram_sim * 0.3 +
                 prefix_sim * 0.2
             )
 
@@ -244,6 +242,19 @@ class ResponseValidator:
             if c1 != c2:
                 return s1[:i]
         return s1[:min(len(s1), len(s2))]
+
+    def _char_ngram_similarity(self, s1: str, s2: str, n: int = 2) -> float:
+        if len(s1) < n or len(s2) < n:
+            return 0.0
+        def build(text: str) -> set:
+            return {text[i:i+n] for i in range(len(text) - n + 1)}
+        ngrams1 = build(s1)
+        ngrams2 = build(s2)
+        if not ngrams1 or not ngrams2:
+            return 0.0
+        intersection = len(ngrams1 & ngrams2)
+        union = len(ngrams1 | ngrams2)
+        return intersection / union if union else 0.0
 
     def _detect_fabrication(
         self,
