@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, Request
 from fastapi.responses import StreamingResponse
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import asyncio
 import json
 import logging
@@ -15,9 +15,12 @@ from rag.evidence_enforcer import EvidenceEnforcer
 from rag.citation_tracker import CitationTracker
 from rag.answer_formatter import AnswerFormatter
 from rag.response_postprocessor import ResponsePostProcessor
+from rag.response_grounder import ResponseGrounder
+from rag.response_validator import ResponseValidator
 from rag.conversation_summarizer import ConversationSummarizer
 from rag.query_rewriter import QueryRewriter, RewriteContext
 from rag.topic_detector import TopicChangeDetector
+from rag.doc_scope_resolver import DocScopeResolver, DocScopeResolution
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,8 +31,11 @@ from config import config
 from utils.error_handler import ErrorHandler
 from utils.rate_limiter import RateLimiter
 from services.title_generator import TitleGenerator
+from utils.query_logger import get_query_logger, QueryLog, SearchResult
+import time
 
 logger = logging.getLogger(__name__)
+query_logger = get_query_logger()
 
 router = APIRouter()
 
@@ -47,6 +53,9 @@ summarizer: Optional[ConversationSummarizer] = None
 query_rewriter: Optional[QueryRewriter] = None
 title_generator: Optional[TitleGenerator] = None
 topic_detector: Optional[TopicChangeDetector] = None
+grounder: Optional[ResponseGrounder] = None
+doc_scope_resolver: Optional[DocScopeResolver] = None
+response_validator: Optional[ResponseValidator] = None
 
 
 def get_retriever():
@@ -96,6 +105,60 @@ def get_topic_detector() -> TopicChangeDetector:
             min_score_threshold=config.TOPIC_MIN_SCORE_THRESHOLD
         )
     return topic_detector
+
+
+def get_response_grounder() -> ResponseGrounder:
+    global grounder
+    if grounder is None:
+        grounder = ResponseGrounder()
+    return grounder
+
+
+def get_doc_scope_resolver() -> DocScopeResolver:
+    global doc_scope_resolver
+    if doc_scope_resolver is None:
+        doc_scope_resolver = DocScopeResolver(get_topic_detector())
+    return doc_scope_resolver
+
+
+def get_response_validator() -> ResponseValidator:
+    global response_validator
+    if response_validator is None:
+        response_validator = ResponseValidator()
+    return response_validator
+
+
+def _deduplicate_doc_ids(doc_ids: Optional[List[str]]) -> List[str]:
+    if not doc_ids:
+        return []
+    seen: set = set()
+    ordered: List[str] = []
+    for doc_id in doc_ids:
+        if not doc_id or doc_id in seen:
+            continue
+        seen.add(doc_id)
+        ordered.append(doc_id)
+    return ordered
+
+
+def _extract_unique_doc_ids(evidences: List[Dict[str, Any]]) -> List[str]:
+    return _deduplicate_doc_ids([e.get("doc_id") for e in evidences])
+
+
+def _average_evidence_score(evidences: List[Dict[str, Any]]) -> Optional[float]:
+    scores: List[float] = []
+    for evidence in evidences:
+        for key in ("score", "similarity", "relevance", "hybrid_score", "normalized_score"):
+            value = evidence.get(key)
+            if isinstance(value, (int, float)):
+                score = float(value)
+                if score > 1.0 and key in ("score", "similarity", "relevance"):
+                    score = score / 100.0
+                scores.append(score)
+                break
+    if not scores:
+        return None
+    return sum(scores) / len(scores)
 
 
 def _collect_memory_facts(response: Dict) -> List[Dict[str, str]]:
@@ -166,6 +229,64 @@ def _build_memory_evidences(session: ChatSession, doc_scope: Optional[List[str]]
         })
 
     return evidences
+
+
+def _finalize_doc_scope_metadata(
+    base: Optional[Dict[str, Any]],
+    *,
+    mode: str,
+    doc_scope_ids: List[str],
+    resolved_doc_ids: List[str],
+    requested_doc_ids: List[str],
+    diagnostics: Optional[Dict[str, Any]] = None,
+    average_score: Optional[float] = None,
+    topic_change: bool = False,
+    topic_reason: Optional[str] = None,
+    topic_suggested: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    metadata = dict(base or {})
+    metadata["mode"] = mode
+    metadata["doc_scope"] = mode
+    metadata["doc_scope_ids"] = doc_scope_ids
+    metadata["resolved_doc_ids"] = resolved_doc_ids
+    metadata["requested_doc_ids"] = requested_doc_ids
+
+    if diagnostics:
+        metadata["diagnostics"] = diagnostics
+    if average_score is not None:
+        metadata["average_score"] = average_score
+    if topic_change:
+        metadata["topic_change_detected"] = True
+        if topic_reason:
+            metadata["topic_change_reason"] = topic_reason
+        if topic_suggested:
+            metadata["suggested_doc_ids"] = topic_suggested
+
+    return metadata
+
+
+def _resolve_evidences(
+    *,
+    query: str,
+    retrieval_query: str,
+    retriever_instance,
+    requested_doc_ids: List[str],
+    session_doc_ids: List[str],
+    previous_doc_ids: List[str],
+    should_use_previous_sources: bool,
+) -> DocScopeResolution:
+    resolver = get_doc_scope_resolver()
+    return resolver.resolve(
+        query=query,
+        retrieval_query=retrieval_query,
+        retriever=retriever_instance,
+        requested_doc_ids=requested_doc_ids,
+        session_doc_ids=session_doc_ids,
+        previous_doc_ids=previous_doc_ids,
+        should_use_previous_sources=should_use_previous_sources,
+        topk=config.TOPK_BM25 + config.TOPK_VECTOR,
+        allow_topic_expansion=True,
+    )
 
 
 def get_title_generator() -> TitleGenerator:
@@ -375,12 +496,22 @@ async def send_message(
             raise HTTPException(status_code=400, detail="메시지가 너무 깁니다. 짧게 나누어 보내주세요")
         
         # Check if documents are uploaded
-        if not session.document_ids and not getattr(request, "skip_document_check", False):
-            raise HTTPException(
-                status_code=400,
-                detail="먼저 문서를 업로드해 주세요",
-                headers={"X-Error-Type": "NO_DOCUMENTS"}
-            )
+        # Note: Allow empty list [] or None for full index search
+        # Only block if document_ids is explicitly an empty list AND index is empty
+        if session.document_ids is not None and len(session.document_ids) == 0:
+            # Check if there are any documents in the index
+            try:
+                from rag.whoosh_bm25 import WhooshBM25
+                whoosh_bm25 = WhooshBM25()
+                if whoosh_bm25.get_doc_count() == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="먼저 문서를 업로드해 주세요",
+                        headers={"X-Error-Type": "NO_DOCUMENTS"}
+                    )
+            except Exception as e:
+                logger.warning(f"Could not check document count: {e}")
+                # Allow query to proceed even if check fails
         
         # Add user message
         await session_manager.add_message(session_id, "user", request.query)
@@ -412,16 +543,16 @@ async def send_message(
             )
             first_assistant_found = False
             previous_doc_ids = []
-        # 첫 답변의 고정된 evidences가 있으면 사용
+        # 첫 답변의 고정된 evidences에서 문서 범위만 추출 (evidence 자체는 재사용하지 않음)
         elif session.first_response_evidences:
             first_assistant_found = True
-            # Extract doc_ids from stored evidences
+            # Extract doc_ids from stored evidences (문서 범위만 사용)
             previous_doc_ids = list(set([
                 e.get("doc_id")
                 for e in session.first_response_evidences
                 if e.get("doc_id")
             ]))
-            logger.info(f"Using stored first response evidences: {len(session.first_response_evidences)} items, docs: {previous_doc_ids}")
+            logger.info(f"Using doc scope from first response: docs: {previous_doc_ids} (will search for new evidences)")
         else:
             # 첫 번째 assistant 메시지의 출처를 찾아서 고정
             for message in session.messages:
@@ -485,253 +616,75 @@ async def send_message(
 
         # 이전 답변의 sources를 사용할지 결정
         should_use_previous_sources = bool(previous_doc_ids) and not requested_doc_ids and not request.reset_context
+        topic_change_detected = False
+        topic_change_reason: Optional[str] = None
+        topic_change_suggested: List[str] = []
+        doc_scope_metadata: Dict[str, Any] = {}
+        allowed_docs_enforce: Optional[List[str]] = None
+        doc_scope_ids: List[str] = []
 
         # Process query with RAG
         try:
-            # 1. Retrieve with document filtering
             logger.info(f"Retrieving for query: {request.query}")
             logger.info(f"Session document IDs: {session.document_ids}")
 
             retriever_instance = get_retriever()
-            evidences = []
+            resolution = _resolve_evidences(
+                query=request.query,
+                retrieval_query=retrieval_query,
+                retriever_instance=retriever_instance,
+                requested_doc_ids=requested_doc_ids,
+                session_doc_ids=session.document_ids or [],
+                previous_doc_ids=previous_doc_ids,
+                should_use_previous_sources=should_use_previous_sources,
+            )
 
-            if requested_doc_ids:
-                evidences = retriever_instance.retrieve(
-                    retrieval_query,
-                    limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                    document_ids=requested_doc_ids
+            if resolution.status == "no_evidence":
+                response_text = resolution.error_message or "업로드된 문서에서 해당 정보를 찾을 수 없습니다."
+                await session_manager.add_message(
+                    session_id,
+                    "assistant",
+                    response_text,
+                    error="no_evidence",
+                    metadata={"doc_scope": resolution.doc_scope_ids},
                 )
-                logger.info(
-                    "User-specified document scope %s returned %d evidences",
-                    requested_doc_ids,
-                    len(evidences)
+                return QueryResponse(
+                    query=request.query,
+                    answer=response_text,
+                    key_facts=[],
+                    sources=[],
+                    error="no_evidence",
+                    session_id=session_id,
+                    metadata={"doc_scope": resolution.metadata},
                 )
-                if not evidences:
-                    response_text = "지정된 문서 범위에서 관련 정보를 찾을 수 없습니다. 다른 문서를 선택하거나 질문을 수정해 주세요."
-                    await session_manager.add_message(
-                        session_id,
-                        "assistant",
-                        response_text,
-                        error="no_evidence",
-                        metadata={"doc_scope": requested_doc_ids}
-                    )
-                    return QueryResponse(
-                        query=request.query,
-                        answer=response_text,
-                        key_facts=[],
-                        sources=[],
-                        error="no_evidence",
-                        session_id=session_id
-                    )
 
-            elif should_use_previous_sources:
-                # Simple and effective topic change detection
-                topic_change_detected = False
-                evidences = []  # Initialize evidences
+            evidences = resolution.evidences
+            doc_scope_metadata = dict(resolution.metadata or {})
+            topic_change_detected = resolution.topic_change_detected
+            topic_change_reason = resolution.topic_change_reason
+            topic_change_suggested = resolution.topic_change_suggested or []
+            should_use_previous_sources = resolution.allow_fixed_citations
+            doc_scope_ids = resolution.doc_scope_ids
+            doc_scope_mode = resolution.doc_scope_mode
 
-                # Log topic detection status
-                logger.info(f"Topic detection enabled: {config.TOPIC_DETECTION_ENABLED}")
-                logger.info(f"Previous doc IDs available: {bool(previous_doc_ids)} -> {previous_doc_ids}")
-                logger.info(f"Query for topic check: {request.query}")
-
-                if config.TOPIC_DETECTION_ENABLED and previous_doc_ids:
-                    logger.info(f"🔍 Topic detection check for query: {request.query[:50]}...")
-                    logger.info(f"   Previous docs: {previous_doc_ids}")
-
-                    # Step 1: Try retrieving from previous documents ONLY
-                    evidences_from_previous = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=10,  # Just get top 10 for checking
-                        document_ids=previous_doc_ids
-                    )
-
-                    # Step 2: Try retrieving from ALL documents
-                    evidences_from_all = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=10,  # Just get top 10 for checking
-                        document_ids=session.document_ids if session.document_ids else None
-                    )
-
-                    # Step 3: Simple overlap check - are the top results from different documents?
-                    prev_doc_set = set(previous_doc_ids)
-
-                    # Get document IDs from top results
-                    top_docs_from_all = []
-                    for evidence in evidences_from_all[:5]:  # Check top 5
-                        doc_id = evidence.get("doc_id")
-                        if doc_id and doc_id not in top_docs_from_all:
-                            top_docs_from_all.append(doc_id)
-
-                    logger.info(f"   Top docs from all search: {top_docs_from_all}")
-
-                    # Calculate overlap
-                    docs_in_previous = [d for d in top_docs_from_all if d in prev_doc_set]
-                    docs_not_in_previous = [d for d in top_docs_from_all if d not in prev_doc_set]
-
-                    overlap_ratio = len(docs_in_previous) / len(top_docs_from_all) if top_docs_from_all else 1.0
-
-                    logger.info(f"   Overlap ratio: {overlap_ratio:.2f} (in prev: {docs_in_previous}, new: {docs_not_in_previous})")
-
-                    # Topic change detection rules:
-                    # 1. No results from previous docs at all
-                    # 2. Very low overlap (< 40%) in top results
-                    # 3. Top result is from a completely different document
-                    # 4. All top results have very low scores (likely unrelated)
-
-                    # Check if we have ANY meaningful results from previous docs
-                    has_meaningful_results = False
-                    if evidences_from_previous:
-                        # Check if any evidence has reasonable score
-                        for ev in evidences_from_previous[:3]:
-                            score = ev.get("score", ev.get("similarity", 0))
-                            if score > 0.1:  # Minimal threshold for relevance
-                                has_meaningful_results = True
-                                break
-
-                    if not evidences_from_previous or not has_meaningful_results:
-                        topic_change_detected = True
-                        logger.warning("   ⚠️ No meaningful results from previous documents - definite topic change")
-                    elif overlap_ratio < 0.4:  # Less than 40% overlap
-                        topic_change_detected = True
-                        logger.warning(f"   ⚠️ Low overlap ({overlap_ratio:.1%}) - likely topic change")
-                    elif top_docs_from_all and top_docs_from_all[0] not in prev_doc_set:
-                        # Top result is from a different document
-                        topic_change_detected = True
-                        logger.warning(f"   ⚠️ Top result from new doc ({top_docs_from_all[0]}) - possible topic change")
-                    elif not top_docs_from_all:  # No good results from any documents
-                        topic_change_detected = True
-                        logger.warning("   ⚠️ No relevant results in any document - topic out of scope")
-
-                    if topic_change_detected:
-                        # Provide helpful message to user
-                        response_text = (
-                            "🔄 주제가 변경된 것으로 보입니다.\n\n"
-                            f"현재 대화는 {', '.join(previous_doc_ids)} 문서를 기반으로 진행 중입니다.\n"
-                        )
-
-                        if docs_not_in_previous:
-                            response_text += f"새로운 질문은 {', '.join(docs_not_in_previous[:2])} 문서와 더 관련이 있어 보입니다.\n\n"
-                        else:
-                            response_text += "새로운 질문과 관련된 내용을 현재 문서에서 찾을 수 없습니다.\n\n"
-
-                        response_text += (
-                            "선택하세요:\n"
-                            "1️⃣ 현재 문서 범위에서 가능한 답변 받기\n"
-                            "2️⃣ 새로운 주제로 대화 시작 (reset_context: true 사용)\n"
-                        )
-
-                        await session_manager.add_message(
-                            session_id,
-                            "assistant",
-                            response_text,
-                            metadata={
-                                "topic_change": True,
-                                "overlap_ratio": overlap_ratio,
-                                "suggested_docs": docs_not_in_previous
-                            }
-                        )
-
-                        return QueryResponse(
-                            query=request.query,
-                            answer=response_text,
-                            key_facts=[],
-                            sources=[],
-                            metadata={
-                                "topic_change": True,
-                                "overlap_ratio": overlap_ratio,
-                                "suggested_docs": docs_not_in_previous
-                            },
-                            session_id=session_id
-                        )
-
-                    # No topic change - use evidences from previous
-                    # Re-retrieve with full limit
-                    evidences = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                        document_ids=previous_doc_ids
-                    )
-                else:
-                    # Original logic without topic detection
-                    # 첫 답변의 evidences가 저장되어 있으면 재사용
-                    if session.first_response_evidences:
-                        evidences = session.first_response_evidences
-                        logger.info(f"Reusing exact first response evidences: {len(evidences)} items")
-                        # Log evidence details for debugging
-                        for idx, e in enumerate(evidences[:3]):
-                            logger.debug(f"Evidence {idx}: doc_id={e.get('doc_id')}, page={e.get('page')}, chunk_id={e.get('chunk_id', '')[:20]}")
-                    elif previous_doc_ids:
-                        evidences = retriever_instance.retrieve(
-                            retrieval_query,
-                            limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                            document_ids=previous_doc_ids
-                        )
-                    else:
-                        # This shouldn't happen, but handle it gracefully
-                        logger.error("No previous docs or first response evidences available")
-                        evidences = []
-
-                # Filter evidences to ensure only previous documents
-                if evidences and previous_doc_ids:
-                    logger.info(f"Before filtering: {len(evidences)} evidences")
-                    filtered_evidences = []
-                    for e in evidences:
-                        if e.get("doc_id") in previous_doc_ids:
-                            filtered_evidences.append(e)
-                        else:
-                            logger.warning(f"Filtering out unexpected doc: {e.get('doc_id')}")
-                    evidences = filtered_evidences
-
-                    logger.info(
-                        "Follow-up query using previous sources %s produced %d evidences after filtering",
-                        previous_doc_ids,
-                        len(evidences)
-                    )
-
-                # Check evidences content
-                logger.info(f"Final evidences count for follow-up: {len(evidences)}")
-                if evidences:
-                    logger.info(f"First evidence: doc_id={evidences[0].get('doc_id')}, text={evidences[0].get('text', '')[:100]}")
-
-                if not evidences:
-                    response_text = "이전 답변에 사용된 문서 범위에서 추가 정보를 찾을 수 없습니다. 질문을 구체화하거나 새로운 문서를 선택해 주세요."
-                    await session_manager.add_message(
-                        session_id,
-                        "assistant",
-                        response_text,
-                        error="no_evidence",
-                        metadata={"doc_scope": previous_doc_ids}
-                    )
-                    return QueryResponse(
-                        query=request.query,
-                        answer=response_text,
-                        key_facts=[],
-                        sources=[],
-                        error="no_evidence",
-                        session_id=session_id
-                    )
+            # 'expanded' 모드(topic change)에서는 문서 필터링을 비활성화
+            if doc_scope_mode == "expanded":
+                allowed_docs_enforce = None  # Allow all documents from evidences
+                logger.info(f"Topic change detected - allowing all evidence documents")
             else:
-                preferred_doc_ids = session.recent_source_doc_ids or []
-                if preferred_doc_ids:
-                    evidences = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                        document_ids=preferred_doc_ids
-                    )
-                    logger.info(
-                        "Initial retrieval with recent sources %s returned %d evidences",
-                        preferred_doc_ids,
-                        len(evidences),
-                    )
+                allowed_docs_enforce = resolution.allowed_doc_ids
+                logger.info(f"Using resolved doc scope: {allowed_docs_enforce}")
 
-                if not evidences:
-                    evidences = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                        document_ids=session.document_ids if session.document_ids else None
-                    )
+            logger.info(
+                "Resolved evidence scope: mode=%s, docs=%s, evidences=%d",
+                resolution.doc_scope_mode,
+                doc_scope_ids,
+                len(evidences),
+            )
 
-            logger.info(f"Retrieved {len(evidences)} evidences")
+            if resolution.diagnostics:
+                logger.debug("Doc scope diagnostics: %s", resolution.diagnostics)
+
 
             # 메모리 기능 비활성화 - 출처 일관성 문제 해결을 위해
             # memory_scope = None
@@ -769,26 +722,26 @@ async def send_message(
                     session_id=session_id
                 )
             
-            # 2. Rerank if available (첫 답변 evidences 재사용 시 건너뜀)
-            if session.first_response_evidences and should_use_previous_sources:
-                logger.info("Skipping reranking - using exact first response evidences")
+            # 2. Rerank if available (후속 질문에서도 항상 reranking 수행)
+            # 첫 답변 evidences 재사용 로직 제거 - 항상 새로 검색한 evidence를 rerank
+            reranker_instance = get_reranker()
+            if reranker_instance and (
+                reranker_instance.model or (
+                    reranker_instance.use_onnx and hasattr(reranker_instance, 'ort_session')
+                )
+            ):
+                evidences = reranker_instance.rerank(
+                    retrieval_query,
+                    evidences,
+                    top_k=config.TOPK_RERANK
+                )
+                logger.info(f"Reranked {len(evidences)} evidences for query")
             else:
-                reranker_instance = get_reranker()
-                if reranker_instance and (
-                    reranker_instance.model or (
-                        reranker_instance.use_onnx and hasattr(reranker_instance, 'ort_session')
-                    )
-                ):
-                    evidences = reranker_instance.rerank(
-                        retrieval_query,
-                        evidences,
-                        top_k=config.TOPK_RERANK
-                    )
-                else:
-                    evidences = evidences[:config.TOPK_RERANK]
+                evidences = evidences[:config.TOPK_RERANK]
 
-            # 2.5 리랭킹 후에도 후속 질문인 경우 재필터링 (첫 답변 evidences 재사용 시 불필요)
-            if should_use_previous_sources and previous_doc_ids and not session.first_response_evidences:
+            # 2.5 리랭킹 후 후속 질문인 경우 문서 범위 필터링
+            # IMPORTANT: 'expanded' 모드는 topic change를 의미하므로 필터링하지 않음
+            if should_use_previous_sources and previous_doc_ids and doc_scope_mode != "expanded":
                 filtered_evidences = []
                 for e in evidences:
                     if e.get("doc_id") in previous_doc_ids:
@@ -797,27 +750,28 @@ async def send_message(
                         logger.warning(f"Post-rerank filtering out evidence from unexpected doc: {e.get('doc_id')}")
                 evidences = filtered_evidences
                 logger.info(f"Post-rerank filter: {len(evidences)} evidences from {previous_doc_ids}")
+            elif doc_scope_mode == "expanded":
+                logger.info(f"Skipping post-rerank filter due to expanded mode (topic change detected)")
 
             # 클라이언트 연결이 끊겼다면 즉시 중단
             if cancel_event.is_set():
                 raise HTTPException(status_code=499, detail="Client closed request")
 
             # 2.6 생성 전 최종 필터링 - 후속 질문인 경우
-            if should_use_previous_sources:
-                if session.first_response_evidences:
-                    # 첫 답변의 exact evidences 사용 중 - 추가 필터링 불필요
-                    logger.info(f"Using exact first response evidences - no additional filtering needed")
-                elif previous_doc_ids:
-                    # evidences를 다시 한번 확인
-                    final_evidences = []
-                    for e in evidences:
-                        doc_id = e.get("doc_id")
-                        if doc_id in previous_doc_ids:
-                            final_evidences.append(e)
-                        else:
-                            logger.error(f"Evidence from unexpected document {doc_id} detected and removed")
-                    evidences = final_evidences
-                    logger.info(f"Final pre-generation filter: {len(evidences)} evidences from allowed documents")
+            # IMPORTANT: 'expanded' 모드는 topic change를 의미하므로 필터링하지 않음
+            if should_use_previous_sources and previous_doc_ids and doc_scope_mode != "expanded":
+                # evidences를 다시 한번 확인
+                final_evidences = []
+                for e in evidences:
+                    doc_id = e.get("doc_id")
+                    if doc_id in previous_doc_ids:
+                        final_evidences.append(e)
+                    else:
+                        logger.error(f"Evidence from unexpected document {doc_id} detected and removed")
+                evidences = final_evidences
+                logger.info(f"Final pre-generation filter: {len(evidences)} evidences from allowed documents")
+            elif doc_scope_mode == "expanded":
+                logger.info(f"Skipping pre-generation filter due to expanded mode (topic change detected)")
 
             # 3. Generate with context (취소 가능 태스크로 실행)
             gen_task = asyncio.create_task(
@@ -825,6 +779,7 @@ async def send_message(
                     request.query,
                     evidences,
                     context=context,
+                    doc_scope=doc_scope_metadata,
                     stream=False
                 )
             )
@@ -871,15 +826,21 @@ async def send_message(
                     pass
                 raise HTTPException(status_code=499, detail="Client closed request")
             
-            # 4. Verify and enforce evidence (with document filtering for follow-up questions)
-            allowed_docs_enforce = previous_doc_ids if should_use_previous_sources and previous_doc_ids else None
+            # 4. Ground and verify response (respect resolved scope)
+            response = get_response_grounder().ground(response, evidences)
+            response = postprocessor.process(response, evidences, query=request.query)
+
+            response_validator = get_response_validator()
+            response, validation_issues = response_validator.validate_and_correct(response, evidences)
+            if validation_issues:
+                logger.info("Response validator issues: %s", validation_issues[:5])
 
             # 4.1 생성된 response에서 sources 강제 필터링
-            if should_use_previous_sources and previous_doc_ids and "sources" in response:
+            if allowed_docs_enforce and "sources" in response:
                 original_sources = response.get("sources", [])
                 filtered_sources = []
                 for src in original_sources:
-                    if src.get("doc_id") in previous_doc_ids:
+                    if src.get("doc_id") in allowed_docs_enforce:
                         filtered_sources.append(src)
                     else:
                         logger.error(f"CRITICAL: Generated source from {src.get('doc_id')} not in allowed docs! Removing.")
@@ -888,15 +849,13 @@ async def send_message(
 
             response = enforcer.enforce_evidence(response, evidences, allowed_doc_ids=allowed_docs_enforce)
 
-            # 4.5. Apply post-processing to fix common issues
-            response = postprocessor.process(response, evidences)
-
             # 5. Track citations (with document filtering for follow-up questions)
-            allowed_docs = previous_doc_ids if should_use_previous_sources and previous_doc_ids else None
+            allowed_docs = allowed_docs_enforce
 
             # Use fixed citation map for follow-up questions
             fixed_citation_map = session.first_response_citation_map if should_use_previous_sources and session.first_response_citation_map else None
 
+            # Guard fixed citation map usage: only when scope/doc set unchanged and evidence count matches
             if fixed_citation_map:
                 logger.info(f"🔵 FOLLOW-UP - Using fixed citation map")
                 logger.info(f"  - Fixed citation map: {fixed_citation_map}")
@@ -907,14 +866,22 @@ async def send_message(
                 first_evidence_count = session.metadata.get("first_response_evidences_count", 0) if session.metadata else 0
                 if len(evidences) != first_evidence_count:
                     logger.error(f"⚠️ Evidence count mismatch! First: {first_evidence_count}, Current: {len(evidences)}")
+                    fixed_citation_map = None
+
+                # Disable fixed map if topic changed or document scope diverged
+                meta_resolved = set(doc_scope_metadata.get("resolved_doc_ids") or doc_scope_metadata.get("doc_scope_ids") or [])
+                prev_set = set(previous_doc_ids or [])
+                if topic_change_detected or (meta_resolved and prev_set and meta_resolved != prev_set):
+                    logger.info("Disabling fixed citation map due to topic change or scope divergence")
+                    fixed_citation_map = None
 
             response = citation_tracker.track_citations(response, evidences, allowed_doc_ids=allowed_docs, fixed_citation_map=fixed_citation_map)
             
             # 6. Format response (with document filtering for follow-up questions)
-            allowed_docs_format = previous_doc_ids if should_use_previous_sources and previous_doc_ids else None
+            allowed_docs_format = allowed_docs_enforce
 
             # 6.1 답변 텍스트에서 잘못된 출처 번호 제거
-            if should_use_previous_sources and previous_doc_ids:
+            if allowed_docs_format:
                 # sources 개수 확인
                 max_source_num = len(response.get("sources", []))
                 answer = response.get("answer", "")
@@ -953,12 +920,6 @@ async def send_message(
                         logger.debug(f"Source {idx+1}: doc_id={src.get('doc_id')}, page={src.get('page')}")
 
             assistant_content = response.get("formatted_text", response.get("answer", ""))
-            await session_manager.add_message(
-                session_id,
-                "assistant",
-                assistant_content,
-                sources=sources
-            )
 
             # 세션 제목 업데이트 (첫 메시지인 경우)
             title_updated = False
@@ -977,21 +938,30 @@ async def send_message(
                     logger.error(f"Failed to generate title: {e}")
 
             source_doc_ids = [s.get("doc_id") for s in sources if s.get("doc_id")]
-            unique_doc_ids = []
-            for doc_id in source_doc_ids:
-                if doc_id not in unique_doc_ids:
-                    unique_doc_ids.append(doc_id)
+            unique_doc_ids = _deduplicate_doc_ids(source_doc_ids)
+
+            doc_scope_metadata = _finalize_doc_scope_metadata(
+                doc_scope_metadata,
+                mode=doc_scope_mode,
+                doc_scope_ids=doc_scope_ids,
+                resolved_doc_ids=unique_doc_ids,
+                requested_doc_ids=_deduplicate_doc_ids(requested_doc_ids),
+                diagnostics=resolution.diagnostics,
+                average_score=_average_evidence_score(evidences),
+                topic_change=topic_change_detected,
+                topic_reason=topic_change_reason,
+                topic_suggested=_deduplicate_doc_ids(topic_change_suggested),
+            )
 
             # 첫 답변인 경우 evidences와 citation_map 저장
             is_first_response = len([m for m in session.messages if m.role == "assistant"]) == 1
             if is_first_response and not session.first_response_evidences:
                 citation_map = response.get("citation_map", {})
-                logger.info(f"🔴 FIRST RESPONSE - Saving evidences and citation map")
+                logger.info("🔴 FIRST RESPONSE - Saving evidences and citation map")
                 logger.info(f"  - Evidences count: {len(evidences)}")
                 logger.info(f"  - Citation map: {citation_map}")
                 logger.info(f"  - Sources count: {len(sources)}")
 
-                # Log first 3 evidences for debugging
                 for idx, e in enumerate(evidences[:3]):
                     logger.info(f"  - Evidence {idx}: doc_id={e.get('doc_id')}, page={e.get('page')}")
 
@@ -1054,6 +1024,50 @@ async def send_message(
             #     await session_manager.add_memory_facts(session_id, memory_facts)
             logger.debug("Memory facts collection disabled for source consistency")
 
+            response_metadata = {
+                "evidence_count": len(evidences),
+                "hallucination_detected": response.get("verification", {}).get("hallucination_detected", False),
+                "context_messages": len(context),
+                "rewrite": {
+                    "used_fallback": rewrite_result.used_fallback,
+                    "search_query": rewrite_result.search_query,
+                    "reasoning": rewrite_result.reasoning,
+                    "sub_queries": rewrite_result.sub_queries,
+                },
+                "doc_scope": doc_scope_metadata,
+                "memory": {
+                    "summary_available": bool(previous_summary),
+                    "summary_updated": summary_updated,
+                    "entities_count": entities_count,
+                    "summarizer_confidence": summary_confidence,
+                    "source_doc_ids": unique_doc_ids,
+                },
+                "title_updated": title_updated,
+                "new_title": new_title if title_updated else None
+            }
+
+            response_metadata["raw_answer"] = response.get("answer", "")
+            response_metadata["formatted_text"] = assistant_content
+            response_metadata["key_facts"] = response.get("key_facts", [])
+            response_metadata["details"] = response.get("details", "")
+            response_metadata["grounding"] = response.get("grounding", [])
+
+            await session_manager.add_message(
+                session_id,
+                "assistant",
+                assistant_content,
+                sources=sources,
+                metadata=response_metadata
+            )
+
+            logger.info(
+                "Response scope summary",
+                extra={
+                    "session_id": session_id,
+                    "doc_scope": doc_scope_metadata,
+                },
+            )
+
             return QueryResponse(
                 query=request.query,
                 answer=response.get("answer", ""),
@@ -1065,26 +1079,7 @@ async def send_message(
                 formatted_markdown=response.get("formatted_markdown", ""),
                 confidence=response.get("verification", {}).get("confidence", 0),
                 session_id=session_id,
-                metadata={
-                    "evidence_count": len(evidences),
-                    "hallucination_detected": response.get("verification", {}).get("hallucination_detected", False),
-                    "context_messages": len(context),
-                    "rewrite": {
-                        "used_fallback": rewrite_result.used_fallback,
-                        "search_query": rewrite_result.search_query,
-                        "reasoning": rewrite_result.reasoning,
-                        "sub_queries": rewrite_result.sub_queries,
-                    },
-                    "memory": {
-                        "summary_available": bool(previous_summary),
-                        "summary_updated": summary_updated,
-                        "entities_count": entities_count,
-                        "summarizer_confidence": summary_confidence,
-                        "source_doc_ids": unique_doc_ids,
-                    },
-                    "title_updated": title_updated,
-                    "new_title": new_title if title_updated else None
-                }
+                metadata=response_metadata
             )
             
         except asyncio.CancelledError:
@@ -1189,12 +1184,21 @@ async def send_message_stream(
                 yield json.dumps({"error": "메시지를 입력해 주세요"}) + "\n"
                 return
 
-            if not session.document_ids and not getattr(request, "skip_document_check", False):
-                yield json.dumps({
-                    "error": "NO_DOCUMENTS",
-                    "message": "먼저 문서를 업로드해 주세요"
-                }) + "\n"
-                return
+            # Check if documents are uploaded
+            # Note: Allow empty list [] or None for full index search
+            if session.document_ids is not None and len(session.document_ids) == 0:
+                try:
+                    from rag.whoosh_bm25 import WhooshBM25
+                    whoosh_bm25 = WhooshBM25()
+                    if whoosh_bm25.get_doc_count() == 0:
+                        yield json.dumps({
+                            "error": "NO_DOCUMENTS",
+                            "message": "먼저 문서를 업로드해 주세요"
+                        }) + "\n"
+                        return
+                except Exception as e:
+                    logger.warning(f"Could not check document count: {e}")
+                    # Allow query to proceed even if check fails
 
             # Add user message
             await session_manager.add_message(session_id, "user", request.query)
@@ -1209,16 +1213,16 @@ async def send_message_stream(
             previous_doc_ids: List[str] = []
             first_assistant_found = False
 
-            # 첫 답변의 고정된 evidences가 있으면 사용
+            # 첫 답변의 고정된 evidences에서 문서 범위만 추출 (evidence 자체는 재사용하지 않음)
             if session.first_response_evidences:
                 first_assistant_found = True
-                # Extract doc_ids from stored evidences
+                # Extract doc_ids from stored evidences (문서 범위만 사용)
                 previous_doc_ids = list(set([
                     e.get("doc_id")
                     for e in session.first_response_evidences
                     if e.get("doc_id")
                 ]))
-                logger.info(f"Streaming: Using stored first response evidences: {len(session.first_response_evidences)} items, docs: {previous_doc_ids}")
+                logger.info(f"Streaming: Using doc scope from first response: docs: {previous_doc_ids} (will search for new evidences)")
             else:
                 # 첫 번째 assistant 메시지의 출처를 찾아서 고정
                 for message in session.messages:
@@ -1266,6 +1270,12 @@ async def send_message_stream(
                     return
 
             should_use_previous_sources = bool(previous_doc_ids) and not requested_doc_ids
+            doc_scope_metadata: Dict[str, Any] = {}
+            allowed_docs_enforce: Optional[List[str]] = None
+            doc_scope_ids: List[str] = []
+            topic_change_detected = False
+            topic_change_reason: Optional[str] = None
+            topic_change_suggested: List[str] = []
 
             # Send status update
             yield json.dumps({
@@ -1275,130 +1285,79 @@ async def send_message_stream(
                 }
             }) + "\n"
 
-            # Get evidences
             retriever_instance = get_retriever()
-            evidences: List[Dict[str, Any]] = []
+            resolution = _resolve_evidences(
+                query=request.query,
+                retrieval_query=retrieval_query,
+                retriever_instance=retriever_instance,
+                requested_doc_ids=requested_doc_ids,
+                session_doc_ids=session.document_ids or [],
+                previous_doc_ids=previous_doc_ids,
+                should_use_previous_sources=should_use_previous_sources,
+            )
 
-            if requested_doc_ids:
-                evidences = retriever_instance.retrieve(
-                    retrieval_query,
-                    limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                    document_ids=requested_doc_ids
+            if resolution.status == "no_evidence":
+                message = resolution.error_message or "업로드된 문서에서 해당 정보를 찾을 수 없습니다."
+                yield json.dumps({
+                    "error": "no_evidence",
+                    "message": message
+                }) + "\n"
+                await session_manager.add_message(
+                    session_id,
+                    "assistant",
+                    message,
+                    error="no_evidence",
+                    metadata={"doc_scope": resolution.metadata},
                 )
-                logger.info(
-                    "Streaming query with explicit doc scope %s returned %d evidences",
-                    requested_doc_ids,
-                    len(evidences)
-                )
-                if not evidences:
-                    yield json.dumps({
-                        "error": "no_evidence",
-                        "message": "지정된 문서 범위에서 관련 정보를 찾을 수 없습니다."
-                    }) + "\n"
-                    return
-            elif should_use_previous_sources:
-                # 첫 답변의 evidences가 저장되어 있으면 재사용
-                if session.first_response_evidences:
-                    evidences = session.first_response_evidences
-                    logger.info(f"Streaming: Reusing exact first response evidences: {len(evidences)} items")
-                elif previous_doc_ids:
-                    evidences = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                        document_ids=previous_doc_ids
-                    )
+                return
 
-                    # 추가 필터링: 확실히 이전 문서만 포함되도록
-                    filtered_evidences = []
-                    for e in evidences:
-                        if e.get("doc_id") in previous_doc_ids:
-                            filtered_evidences.append(e)
-                        else:
-                            logger.warning(f"Streaming: Filtering out unexpected doc: {e.get('doc_id')}")
-                    evidences = filtered_evidences
-
-                    logger.info(
-                        "Streaming follow-up using documents %s produced %d evidences",
-                        previous_doc_ids,
-                        len(evidences)
-                    )
-                if not evidences:
-                    yield json.dumps({
-                        "error": "no_evidence",
-                        "message": "이전 답변에 사용된 문서 범위에서 추가 정보를 찾을 수 없습니다."
-                    }) + "\n"
-                    return
-            else:
-                preferred_doc_ids = session.recent_source_doc_ids or []
-                if preferred_doc_ids:
-                    evidences = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                        document_ids=preferred_doc_ids
-                    )
-                    logger.info(
-                        "Streaming initial retrieval with recent sources %s returned %d evidences",
-                        preferred_doc_ids,
-                        len(evidences)
-                    )
-
-                if not evidences:
-                    evidences = retriever_instance.retrieve(
-                        retrieval_query,
-                        limit=config.TOPK_BM25 + config.TOPK_VECTOR,
-                        document_ids=session.document_ids if session.document_ids else None
-                    )
-
-            # 메모리 기능 비활성화 - 출처 일관성 문제 해결을 위해
-            # memory_scope = None
-            # if requested_doc_ids:
-            #     memory_scope = requested_doc_ids
-            # elif should_use_previous_sources and previous_doc_ids:
-            #     memory_scope = previous_doc_ids
-
-            # memory_evidences = _build_memory_evidences(session, memory_scope)
-            # if memory_evidences:
-            #     evidences = memory_evidences + evidences
-            #     logger.info(f"Streaming prepended {len(memory_evidences)} memory evidences")
-
-            # 메모리 기능 임시 비활성화
-            logger.info("Streaming: Memory evidences disabled for source consistency")
+            evidences = resolution.evidences
+            doc_scope_metadata = dict(resolution.metadata or {})
+            allowed_docs_enforce = resolution.allowed_doc_ids
+            topic_change_detected = resolution.topic_change_detected
+            topic_change_reason = resolution.topic_change_reason
+            topic_change_suggested = resolution.topic_change_suggested or []
+            should_use_previous_sources = resolution.allow_fixed_citations
+            doc_scope_ids = resolution.doc_scope_ids
+            doc_scope_mode = resolution.doc_scope_mode
 
             if cancel_event.is_set():
                 return
 
-            if not evidences:
-                yield json.dumps({
-                    "error": "no_evidence",
-                    "message": "업로드된 문서에서 해당 정보를 찾을 수 없습니다."
-                }) + "\n"
-                return
-
             # Send status update
+            yield json.dumps({
+                "status": "문서 검색 완료",
+                "metadata": {
+                    "doc_scope": doc_scope_metadata,
+                    "rewrite_used_fallback": rewrite_result.used_fallback
+                }
+            }) + "\n"
+
+            # Send status update for generation
             yield json.dumps({"status": "답변 생성 중..."}) + "\n"
 
-            # Rerank if available (첫 답변 evidences 재사용 시 건너뜀)
-            if session.first_response_evidences and should_use_previous_sources:
-                logger.info("Streaming: Skipping reranking - using exact first response evidences")
+            # Rerank if available (후속 질문에서도 항상 reranking 수행)
+            # 첫 답변 evidences 재사용 로직 제거 - 항상 새로 검색한 evidence를 rerank
+            reranker_instance = get_reranker()
+            if reranker_instance and (
+                getattr(reranker_instance, "model", None)
+                or (getattr(reranker_instance, "use_onnx", False) and hasattr(reranker_instance, "ort_session"))
+            ):
+                evidences = reranker_instance.rerank(
+                    retrieval_query,
+                    evidences,
+                    top_k=config.TOPK_RERANK
+                )
+                logger.info(f"Streaming: Reranked {len(evidences)} evidences for query")
             else:
-                reranker_instance = get_reranker()
-                if reranker_instance and (
-                    getattr(reranker_instance, "model", None)
-                    or (getattr(reranker_instance, "use_onnx", False) and hasattr(reranker_instance, "ort_session"))
-                ):
-                    evidences = reranker_instance.rerank(
-                        retrieval_query,
-                        evidences,
-                        top_k=config.TOPK_RERANK
-                    )
-                else:
-                    evidences = evidences[:config.TOPK_RERANK]
+                evidences = evidences[:config.TOPK_RERANK]
 
             # Stream generation with explicit generator handle for clean aclose
             agen = get_generator().stream_with_context(
                 request.query,
                 evidences,
                 context=context_messages,
+                doc_scope=doc_scope_metadata,
                 cancel_event=cancel_event
             )
             try:
@@ -1478,11 +1437,7 @@ async def send_message_stream(
                         logger.error(f"Failed to record interrupt after cancel: {e}")
                 return
 
-            allowed_docs = None
-            if requested_doc_ids:
-                allowed_docs = requested_doc_ids
-            elif should_use_previous_sources and previous_doc_ids:
-                allowed_docs = previous_doc_ids
+            allowed_docs = allowed_docs_enforce
 
             response_payload = {
                 "answer": full_response,
@@ -1491,6 +1446,13 @@ async def send_message_stream(
                 "sources": [],
             }
 
+            response_payload = get_response_grounder().ground(response_payload, evidences)
+            response_payload = postprocessor.process(response_payload, evidences, query=request.query)
+
+            response_validator = get_response_validator()
+            response_payload, validation_issues = response_validator.validate_and_correct(response_payload, evidences)
+            if validation_issues:
+                logger.info("Response validator (stream) issues: %s", validation_issues[:5])
             response_payload = enforcer.enforce_evidence(
                 response_payload,
                 evidences,
@@ -1498,6 +1460,14 @@ async def send_message_stream(
             )
             # Use fixed citation map for follow-up questions (streaming)
             fixed_citation_map = session.first_response_citation_map if should_use_previous_sources and session.first_response_citation_map else None
+            if fixed_citation_map:
+                first_evidence_count = session.metadata.get("first_response_evidences_count", 0) if session.metadata else 0
+                if len(evidences) != first_evidence_count:
+                    fixed_citation_map = None
+                meta_resolved = set(doc_scope_metadata.get("resolved_doc_ids") or doc_scope_metadata.get("doc_scope_ids") or [])
+                prev_set = set(previous_doc_ids or [])
+                if meta_resolved and prev_set and meta_resolved != prev_set:
+                    fixed_citation_map = None
             response_payload = citation_tracker.track_citations(
                 response_payload,
                 evidences,
@@ -1509,21 +1479,27 @@ async def send_message_stream(
                 allowed_doc_ids=allowed_docs
             )
 
-            full_response = response_payload.get("answer", full_response)
+            assistant_content = response_payload.get("formatted_text", response_payload.get("answer", full_response))
             sources = response_payload.get("sources", [])
-
-            await session_manager.add_message(
-                session_id,
-                "assistant",
-                full_response,
-                sources=sources
-            )
 
             source_doc_ids = [s.get("doc_id") for s in sources if s.get("doc_id")]
             unique_doc_ids: List[str] = []
             for doc_id in source_doc_ids:
                 if doc_id and doc_id not in unique_doc_ids:
                     unique_doc_ids.append(doc_id)
+
+            doc_scope_metadata = _finalize_doc_scope_metadata(
+                doc_scope_metadata,
+                mode=doc_scope_mode,
+                doc_scope_ids=doc_scope_ids,
+                resolved_doc_ids=unique_doc_ids,
+                requested_doc_ids=_deduplicate_doc_ids(requested_doc_ids),
+                diagnostics=resolution.diagnostics,
+                average_score=_average_evidence_score(evidences),
+                topic_change=topic_change_detected,
+                topic_reason=topic_change_reason,
+                topic_suggested=_deduplicate_doc_ids(topic_change_suggested),
+            )
 
             # 첫 답변인 경우 evidences와 citation_map 저장 (스트리밍)
             is_first_response = len([m for m in session.messages if m.role == "assistant"]) == 1
@@ -1584,32 +1560,91 @@ async def send_message_stream(
             except Exception as e:
                 logger.error(f"Failed to update summary in stream: {e}")
 
+            response_metadata = {
+                "evidence_count": len(evidences),
+                "hallucination_detected": response_payload.get("verification", {}).get("hallucination_detected", False),
+                "context_messages": len(context_messages),
+                "rewrite": {
+                    "used_fallback": rewrite_result.used_fallback,
+                    "search_query": rewrite_result.search_query,
+                    "reasoning": rewrite_result.reasoning,
+                    "sub_queries": rewrite_result.sub_queries,
+                },
+                "doc_scope": doc_scope_metadata,
+                "memory": {
+                    "summary_available": bool(previous_summary),
+                    "summary_updated": summary_updated,
+                    "entities_count": entities_count,
+                    "summarizer_confidence": summary_confidence,
+                    "source_doc_ids": unique_doc_ids,
+                },
+                "streaming": True,
+            }
+
+            response_metadata["raw_answer"] = response_payload.get("answer", "")
+            response_metadata["formatted_text"] = assistant_content
+            response_metadata["key_facts"] = response_payload.get("key_facts", [])
+            response_metadata["details"] = response_payload.get("details", "")
+            response_metadata["grounding"] = response_payload.get("grounding", [])
+
+            await session_manager.add_message(
+                session_id,
+                "assistant",
+                assistant_content,
+                sources=sources,
+                metadata=response_metadata
+            )
+
             # 메모리 팩트 저장 비활성화 - 출처 일관성 문제 해결을 위해
             # memory_facts = _collect_memory_facts(response_payload)
             # if memory_facts:
             #     await session_manager.add_memory_facts(session_id, memory_facts)
             logger.debug("Streaming: Memory facts collection disabled for source consistency")
 
+            # Log query details (스트리밍 엔드포인트)
+            try:
+                retriever_instance = get_retriever()
+                query_log_entry = QueryLog(
+                    timestamp=datetime.now().isoformat(),
+                    session_id=session_id,
+                    query=request.query,
+                    extracted_keywords=getattr(retriever_instance, '_last_keywords', []),
+                    bm25_count=getattr(retriever_instance, '_last_bm25_count', 0),
+                    vector_count=getattr(retriever_instance, '_last_vector_count', 0),
+                    rrf_count=getattr(retriever_instance, '_last_rrf_count', 0),
+                    filtered_count=getattr(retriever_instance, '_last_filtered_count', 0),
+                    final_count=len(evidences),
+                    search_results=[
+                        SearchResult(
+                            chunk_id=ev.get("chunk_id", ""),
+                            doc_id=ev.get("doc_id", ""),
+                            page=ev.get("page", 0),
+                            text_preview=ev.get("text", "")[:200],
+                            rrf_score=ev.get("rrf_score", 0.0),
+                            keyword_relevance=ev.get("keyword_relevance", 0.0),
+                            bm25_score=ev.get("bm25_score", 0.0),
+                            vector_score=ev.get("score", 0.0),
+                            include_reason=ev.get("include_reason", "unknown")
+                        )
+                        for ev in evidences
+                    ],
+                    model_name=config.OLLAMA_MODEL,
+                    model_response=full_response,
+                    response_sources=sources,
+                    search_time_ms=0.0,  # Not tracked in streaming
+                    generation_time_ms=0.0,  # Not tracked in streaming
+                    total_time_ms=0.0  # Not tracked in streaming
+                )
+                query_logger.log_query(query_log_entry)
+            except Exception as log_error:
+                logger.error(f"Failed to log streaming query: {log_error}")
+
             # Send final data with sources
             yield json.dumps({
                 "complete": True,
-                "answer": full_response,
+                "answer": assistant_content,
                 "sources": sources,
-                "metadata": {
-                    "rewrite": {
-                        "used_fallback": rewrite_result.used_fallback,
-                        "search_query": rewrite_result.search_query,
-                        "reasoning": rewrite_result.reasoning,
-                        "sub_queries": rewrite_result.sub_queries,
-                    },
-                    "memory": {
-                        "summary_available": bool(previous_summary),
-                        "summary_updated": summary_updated,
-                        "entities_count": entities_count,
-                        "summarizer_confidence": summary_confidence,
-                        "source_doc_ids": unique_doc_ids,
-                    }
-                }
+                "metadata": response_metadata,
             }) + "\n"
             
         except ClientDisconnect:
@@ -1697,17 +1732,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 # Process with lock to prevent concurrent processing
                 async with manager.session_locks.get(session_id, asyncio.Lock()):
                     try:
+                        # Timing start
+                        start_time = time.time()
+
                         # Add user message
                         await session_manager.add_message(session_id, "user", query)
-                        
+
                         # Send status
                         await manager.send_message(session_id, {
                             "type": "status",
                             "message": "문서 검색 중..."
                         })
-                        
-                        # Get evidences
+
+                        # Get evidences with timing
+                        search_start = time.time()
                         evidences = retriever.retrieve(query, document_ids=session.document_ids)
+                        search_time_ms = (time.time() - search_start) * 1000
                         
                         if not evidences:
                             await manager.send_message(session_id, {
@@ -1725,8 +1765,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         
                         # Get context
                         context = await session_manager.get_session_context(session_id)
-                        
-                        # Stream response
+
+                        # Stream response with timing
+                        generation_start = time.time()
                         full_response = ""
                         async for chunk in generator.stream_with_context(
                             query,
@@ -1740,6 +1781,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                     "content": chunk,
                                     "complete": False
                                 })
+                        generation_time_ms = (time.time() - generation_start) * 1000
                         
                         # Process citations
                         response_data = citation_tracker.track_citations(
@@ -1754,6 +1796,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             full_response,
                             sources=response_data.get("sources", [])
                         )
+
+                        # Calculate total time
+                        total_time_ms = (time.time() - start_time) * 1000
+
+                        # Log query details
+                        try:
+                            query_log_entry = QueryLog(
+                                timestamp=datetime.now().isoformat(),
+                                session_id=session_id,
+                                query=query,
+                                extracted_keywords=getattr(retriever, '_last_keywords', []),
+                                bm25_count=getattr(retriever, '_last_bm25_count', 0),
+                                vector_count=getattr(retriever, '_last_vector_count', 0),
+                                rrf_count=getattr(retriever, '_last_rrf_count', 0),
+                                filtered_count=getattr(retriever, '_last_filtered_count', 0),
+                                final_count=len(evidences),
+                                search_results=[
+                                    SearchResult(
+                                        chunk_id=ev.get("chunk_id", ""),
+                                        doc_id=ev.get("doc_id", ""),
+                                        page=ev.get("page", 0),
+                                        text_preview=ev.get("text", "")[:200],
+                                        rrf_score=ev.get("rrf_score", 0.0),
+                                        keyword_relevance=ev.get("keyword_relevance", 0.0),
+                                        bm25_score=ev.get("bm25_score", 0.0),
+                                        vector_score=ev.get("score", 0.0),
+                                        include_reason=ev.get("include_reason", "unknown")
+                                    )
+                                    for ev in evidences
+                                ],
+                                model_name=config.OLLAMA_MODEL,
+                                model_response=full_response,
+                                response_sources=response_data.get("sources", []),
+                                search_time_ms=search_time_ms,
+                                generation_time_ms=generation_time_ms,
+                                total_time_ms=total_time_ms
+                            )
+                            query_logger.log_query(query_log_entry)
+                        except Exception as log_error:
+                            logger.error(f"Failed to log query: {log_error}")
 
                         # Send completion with sources
                         await manager.send_message(session_id, {

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>React Test</title>
+  <script>
+    // Simple test to see if React is loading
+    fetch('http://localhost:5173/src/main.jsx')
+      .then(r => r.text())
+      .then(text => console.log('Main JSX loaded:', text.substring(0, 100)))
+      .catch(e => console.error('Failed to load main.jsx:', e));
+
+    // Check if the app component can be loaded
+    fetch('http://localhost:5173/src/AppMediumClean.jsx')
+      .then(r => r.text())
+      .then(text => console.log('AppMediumClean loaded:', text.substring(0, 100)))
+      .catch(e => console.error('Failed to load AppMediumClean:', e));
+
+    // Check API health
+    fetch('http://localhost:8000/api/health')
+      .then(r => r.json())
+      .then(data => console.log('API Health:', data))
+      .catch(e => console.error('API Error:', e));
+  </script>
+</head>
+<body>
+  <h1>React Loading Test</h1>
+  <p>Check browser console for results</p>
+  <iframe src="http://localhost:5173" width="100%" height="600"></iframe>
+</body>
+</html>

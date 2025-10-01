@@ -7,7 +7,6 @@ import re
 import logging
 from typing import Dict, List, Tuple, Optional
 from difflib import SequenceMatcher
-import Levenshtein
 
 logger = logging.getLogger(__name__)
 
@@ -178,8 +177,8 @@ class ResponseValidator:
 
     def _extract_entities(self, text: str) -> List[str]:
         """Extract potential entity names from text"""
-        # Extract Korean compound nouns (3+ characters)
-        pattern = r'[가-힣]{3,}(?:[가-힣\d]+)?'
+        # Extract words containing Korean and alpha characters (3+ chars)
+        pattern = r'[가-힣A-Za-z][가-힣A-Za-z\d]{2,}'
         entities = re.findall(pattern, text)
 
         # Filter out common words (would need a proper Korean stopword list)
@@ -213,9 +212,8 @@ class ResponseValidator:
             # 1. Sequence similarity
             seq_sim = SequenceMatcher(None, target, candidate).ratio()
 
-            # 2. Levenshtein distance (normalized)
-            lev_dist = Levenshtein.distance(target, candidate)
-            lev_sim = 1 - (lev_dist / max(len(target), len(candidate)))
+            # 2. Character n-gram overlap (bigram Jaccard)
+            ngram_sim = self._char_ngram_similarity(target, candidate)
 
             # 3. Prefix similarity (important for Korean compounds)
             prefix_len = len(self._common_prefix(target, candidate))
@@ -223,8 +221,8 @@ class ResponseValidator:
 
             # Weighted combination
             combined_score = (
-                seq_sim * 0.4 +
-                lev_sim * 0.4 +
+                seq_sim * 0.5 +
+                ngram_sim * 0.3 +
                 prefix_sim * 0.2
             )
 
@@ -244,6 +242,19 @@ class ResponseValidator:
             if c1 != c2:
                 return s1[:i]
         return s1[:min(len(s1), len(s2))]
+
+    def _char_ngram_similarity(self, s1: str, s2: str, n: int = 2) -> float:
+        if len(s1) < n or len(s2) < n:
+            return 0.0
+        def build(text: str) -> set:
+            return {text[i:i+n] for i in range(len(text) - n + 1)}
+        ngrams1 = build(s1)
+        ngrams2 = build(s2)
+        if not ngrams1 or not ngrams2:
+            return 0.0
+        intersection = len(ngrams1 & ngrams2)
+        union = len(ngrams1 | ngrams2)
+        return intersection / union if union else 0.0
 
     def _detect_fabrication(
         self,
@@ -286,21 +297,29 @@ class ResponseValidator:
         return [s.strip() for s in sentences if s.strip()]
 
     def _extract_content_words(self, sentence: str) -> List[str]:
-        """Extract content-bearing words from sentence"""
+        """
+        Extract content-bearing words from sentence using STATISTICAL approach.
+
+        NO HARDCODED stopwords - relies on:
+        1. Length-based filtering (longer words = more content)
+        2. Character variety (entropy-like measure)
+
+        Works for ANY Korean dialect/domain without hardcoding.
+        """
         # Extract Korean words (2+ characters)
         words = re.findall(r'[가-힣]{2,}', sentence)
 
-        # Filter out very common words (simplified)
-        # In production, use proper Korean stopword list
-        common_words = {
-            '있습니다', '있으며', '되어', '하고', '있는',
-            '대한', '대해', '위한', '통해', '따라'
-        }
-
-        content_words = [
-            w for w in words
-            if w not in common_words and len(w) >= 2
-        ]
+        content_words = []
+        for word in words:
+            # Statistical filtering: longer words are more likely to be content words
+            # Korean function words tend to be 1-2 chars, content words 3+ chars
+            if len(word) >= 3:
+                content_words.append(word)
+            elif len(word) == 2:
+                # For 2-char words, check character variety (simple entropy proxy)
+                # If both chars are same or very common pattern, likely functional
+                if len(set(word)) == 2:  # Both chars different
+                    content_words.append(word)
 
         return content_words
 

@@ -1007,24 +1007,29 @@
 }
 
 .medium-source-button {
-  background: transparent;
-  border: 1px solid var(--medium-accent);
-  border-radius: 20px;
-  padding: 0.35rem 0.75rem;
+  background: linear-gradient(to right, #f0f7ff 0%, #ffffff 100%);
+  border: 1px solid #1a73e8;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
   font-family: var(--font-secondary);
-  font-size: 0.8rem;
-  color: var(--medium-accent);
+  font-size: 0.9rem;
+  color: #1a73e8;
   cursor: pointer;
-  text-align: center;
+  text-align: left;
   transition: all 0.2s;
   white-space: nowrap;
+  text-decoration: underline;
+  display: inline-block;
+  margin: 0.25rem;
 }
 
 .medium-source-button:hover {
-  background: var(--medium-accent);
-  color: var(--medium-white);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(26, 137, 23, 0.3);
+  background: linear-gradient(to right, #e3f2fd 0%, #f0f7ff 100%);
+  color: #0052cc;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(26, 115, 232, 0.25);
+  border-color: #0052cc;
+  text-decoration: underline;
 }
 
 .medium-source-link {

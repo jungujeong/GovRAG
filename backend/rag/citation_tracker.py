@@ -3,6 +3,7 @@ from typing import Dict, List, Tuple, Optional
 import json
 import logging
 import numpy as np
+import unicodedata
 from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,67 @@ class CitationTracker:
 
         # Filter sources if allowed_doc_ids is provided
         if allowed_doc_ids:
+            # Debug log the structure
+            logger.info(f"DEBUG: allowed_doc_ids = {allowed_doc_ids}")
+            if evidences:
+                logger.info(f"DEBUG: First evidence structure: {evidences[0].keys() if evidences[0] else 'empty'}")
+                first_doc_id = evidences[0].get('doc_id', 'NO DOC_ID')
+                logger.info(f"DEBUG: First evidence doc_id field: {first_doc_id}")
+                logger.info(f"DEBUG: First evidence doc_id repr: {repr(first_doc_id)}")
+                logger.info(f"DEBUG: First evidence metadata: {evidences[0].get('metadata', {})}")
+                # Also debug the allowed doc IDs in detail
+                for allowed_id in allowed_doc_ids:
+                    logger.info(f"DEBUG: Allowed doc_id repr: {repr(allowed_id)}")
+
             # Filter evidences to only allowed documents
-            filtered_evidences = [e for e in evidences if e.get("doc_id") in allowed_doc_ids]
-            # Filter sources to only allowed documents
-            sources = [s for s in sources if s.get("doc_id") in allowed_doc_ids]
+            # Check both doc_id field and metadata.doc_id
+            filtered_evidences = []
+            for e in evidences:
+                doc_id = e.get("doc_id") or e.get("metadata", {}).get("doc_id")
+                if doc_id:
+                    # Strip and normalize doc_id for comparison (Unicode normalization)
+                    doc_id = unicodedata.normalize('NFC', doc_id.strip())
+                    # Check if doc_id matches any allowed doc (with flexible matching)
+                    matched = False
+                    for allowed_id in allowed_doc_ids:
+                        allowed_id_normalized = unicodedata.normalize('NFC', allowed_id.strip())
+                        logger.info(f"Comparing normalized: '{doc_id}' with '{allowed_id_normalized}'")
+                        if doc_id == allowed_id_normalized:
+                            matched = True
+                            logger.info(f"Matched exact: {doc_id}")
+                            break
+                        # Also try removing .pdf extension
+                        doc_id_no_pdf = doc_id.replace('.pdf', '')
+                        allowed_no_pdf = allowed_id_normalized.replace('.pdf', '')
+                        if doc_id_no_pdf == allowed_no_pdf:
+                            matched = True
+                            logger.info(f"Matched without .pdf: {doc_id}")
+                            break
+
+                    if matched:
+                        filtered_evidences.append(e)
+                        logger.info(f"✓ Keeping evidence with doc_id: {doc_id}")
+                    else:
+                        logger.warning(f"✗ Filtering out evidence with doc_id: '{doc_id}' - no match found")
+                else:
+                    # Keep evidences without doc_id
+                    logger.debug(f"Keeping evidence without doc_id: {e.get('chunk_id', 'unknown')}")
+                    filtered_evidences.append(e)
+
+            # Filter sources similarly
+            filtered_sources = []
+            for s in sources:
+                doc_id = s.get("doc_id") or s.get("metadata", {}).get("doc_id")
+                if doc_id:
+                    if doc_id in allowed_doc_ids:
+                        filtered_sources.append(s)
+                else:
+                    # Keep sources without doc_id
+                    filtered_sources.append(s)
+
             logger.info(f"Citation tracking: filtered {len(evidences)} to {len(filtered_evidences)} evidences based on allowed docs: {allowed_doc_ids}")
             evidences = filtered_evidences
+            sources = filtered_sources
 
         # Create citation map from evidences
         self.citation_map = self._build_citation_map(evidences)
@@ -47,7 +103,7 @@ class CitationTracker:
 
             # Format sources using fixed mapping
             formatted_sources = self._format_sources_with_fixed_map(sources, evidences, fixed_citation_map)
-            response["sources"] = formatted_sources
+            response["sources"] = self._dedupe_sources(formatted_sources)
 
             # Store the citation map for return
             response["citation_map"] = fixed_citation_map
@@ -58,7 +114,7 @@ class CitationTracker:
 
             # Format source list
             formatted_sources = self._format_sources(sources, evidences)
-            response["sources"] = formatted_sources
+            response["sources"] = self._dedupe_sources(formatted_sources)
 
             # Store the citation map for future use
             response["citation_map"] = used_citation_map
@@ -77,10 +133,12 @@ class CitationTracker:
         citation_map = {}
         
         for idx, evidence in enumerate(evidences, 1):
-            key = f"{evidence.get('doc_id', '')}_{evidence.get('page', 0)}"
+            raw_id = evidence.get('doc_id', '') or ''
+            norm_id = unicodedata.normalize('NFC', str(raw_id).strip())
+            key = f"{norm_id}_{evidence.get('page', 0)}"
             citation_map[key] = {
                 "index": idx,
-                "doc_id": evidence.get("doc_id", "unknown"),
+                "doc_id": norm_id or "unknown",
                 "page": evidence.get("page", 0),
                 "start_char": evidence.get("start_char", -1),
                 "end_char": evidence.get("end_char", -1),
@@ -88,6 +146,24 @@ class CitationTracker:
             }
         
         return citation_map
+
+    def _dedupe_sources(self, sources: List[Dict]) -> List[Dict]:
+        """Remove duplicate sources by normalized (doc_id, page, chunk_id)."""
+        seen = set()
+        deduped: List[Dict] = []
+        for s in sources or []:
+            raw_id = s.get('doc_id') or s.get('metadata', {}).get('doc_id') or ''
+            norm_id = unicodedata.normalize('NFC', str(raw_id).strip())
+            page = s.get('page', 0)
+            chunk_id = s.get('chunk_id', '')
+            key = (norm_id, page, chunk_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            s = dict(s)
+            s['doc_id'] = norm_id
+            deduped.append(s)
+        return deduped
     
     def _add_inline_citations(self, text: str, evidences: List[Dict]) -> str:
         """Add inline citation markers to text - ensuring sequential numbering"""
@@ -480,24 +556,25 @@ class CitationTracker:
         # Create reverse map (citation_number -> evidence_key)
         reverse_map = {v: k for k, v in fixed_map.items()}
 
-        # Sort by citation number
-        for cite_num in sorted(reverse_map.keys()):
-            evidence_key = reverse_map[cite_num]
+        # Keep original evidence order instead of sorting by citation number
+        # This preserves the logical flow of information
+        seen_citations = set()
+        for evidence in evidences:
+            evidence_key = f"{evidence.get('doc_id', '')}_{evidence.get('page', 0)}_{evidence.get('chunk_id', '')}"
+            if evidence_key in fixed_map and fixed_map[evidence_key] not in seen_citations:
+                cite_num = fixed_map[evidence_key]
+                seen_citations.add(cite_num)
 
-            # Find the corresponding evidence
-            for evidence in evidences:
-                current_key = f"{evidence.get('doc_id', '')}_{evidence.get('page', 0)}_{evidence.get('chunk_id', '')}"
-                if current_key == evidence_key:
-                    formatted.append({
-                        "index": cite_num,
-                        "doc_id": evidence.get("doc_id", "unknown"),
-                        "page": evidence.get("page", 0),
-                        "start_char": evidence.get("start_char", -1),
-                        "end_char": evidence.get("end_char", -1),
-                        "chunk_id": evidence.get("chunk_id", ""),
-                        "text_snippet": evidence.get("text", "")
-                    })
-                    break
+                formatted.append({
+                    "index": cite_num,
+                    "display_index": cite_num,  # Add display_index for frontend
+                    "doc_id": evidence.get("doc_id", "unknown"),
+                    "page": evidence.get("page", 0),
+                    "start_char": evidence.get("start_char", -1),
+                    "end_char": evidence.get("end_char", -1),
+                    "chunk_id": evidence.get("chunk_id", ""),
+                    "text_snippet": evidence.get("text", "")
+                })
 
         return formatted
     

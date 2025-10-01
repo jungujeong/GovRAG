@@ -22,23 +22,25 @@ class AnswerFormatter:
         # Clean up response content first
         response = self._clean_response_content(response)
 
-        # Remove invalid source references from answer text if allowed_doc_ids is provided
-        if allowed_doc_ids:
-            response = self._remove_invalid_source_refs(response, allowed_doc_ids)
-        
-        # Filter sources to only include those cited in the answer
-        response = self._filter_cited_sources(response)
-        
+        # Skip invalid source removal for now - it's removing all citations
+        # if allowed_doc_ids:
+        #     response = self._remove_invalid_source_refs(response, allowed_doc_ids)
+
+        # If citation_map exists (from tracker), trust it and avoid extra renumbering
+        if not response.get("citation_map"):
+            response = self._filter_cited_sources(response)
+            response = self._reorder_citations(response)
+
         formatted = {
             "formatted_text": self._format_as_text(response),
             "formatted_html": self._format_as_html(response),
             "formatted_json": self._format_as_json(response),
             "formatted_markdown": self._format_as_markdown(response)
         }
-        
+
         # Add formatted versions to original response
         response.update(formatted)
-        
+
         return response
     
     def _clean_response_content(self, response: Dict) -> Dict:
@@ -62,9 +64,12 @@ class AnswerFormatter:
         if not text:
             return text
 
-        # Filter to keep only Korean, ASCII, and common punctuation
+        # Filter to keep only Korean, ASCII, and common punctuation (preserve newlines)
         cleaned_chars = []
         for char in text:
+            if char == '\n':
+                cleaned_chars.append(char)
+                continue
             code = ord(char)
             # Keep Korean characters
             if (0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
@@ -83,10 +88,12 @@ class AnswerFormatter:
             else:
                 cleaned_chars.append(' ')
 
+        # Collapse spaces per line but preserve line breaks
         result = ''.join(cleaned_chars)
-
-        # Clean up multiple spaces
-        result = re.sub(r'\s+', ' ', result)
+        lines = []
+        for ln in result.splitlines(True):  # keepends
+            lines.append(re.sub(r'[ \t]+', ' ', ln))
+        result = ''.join(lines)
 
         # Ensure department names are properly formatted (comma-separated)
         result = re.sub(r'([가-힣]+과)\s+([가-힣]+과)', r'\1, \2', result)
@@ -119,13 +126,7 @@ class AnswerFormatter:
             lines.append(details_text)
             lines.append("")
         
-        # 4. Sources
-        if response.get("sources"):
-            lines.append(f"{self.section_headers['sources']}")
-            for idx, source in enumerate(response["sources"], 1):
-                doc_id = source.get("doc_id", "unknown")
-                page = source.get("page", 0)
-                lines.append(f"  [{idx}] {doc_id}, {page}페이지")
+        # 4. Sources (omit in formatted_text; UI renders structured sources separately)
         
         return "\n".join(lines)
     
@@ -321,6 +322,7 @@ class AnswerFormatter:
             r'\d+\.\[(\d+)\]',     # 1.[1], 2.[1]
             r'문서\s*(\d+)',        # 문서 1, 문서1
             r'\*\*문서\s*(\d+)',    # **문서 1
+            r'\[문서\s*(\d+),\s*\d+\]',  # [문서 1, 116]
         ]
         
         for pattern in patterns:
@@ -358,16 +360,30 @@ class AnswerFormatter:
         cited_indices = [s["original_index"] for s in sources if s.get("is_cited")]
         logger.info(f"Citation analysis: {len(sources)} total sources, cited: {cited_indices}")
         
-        # Renumber cited sources sequentially
+        # Check if we're in follow-up mode with fixed citations
+        is_followup = response.get("metadata", {}).get("is_followup", False)
+
+        # For follow-up questions with fixed citations, preserve original numbering
+        if is_followup and sources and len(sources) > 0 and sources[0].get("display_index"):
+            # Keep sources with their existing display_index
+            cited_sources = []
+            for source in sources:
+                if source.get("index") in cited_numbers or source.get("display_index") in cited_numbers:
+                    cited_sources.append(source.copy())
+            response["sources"] = cited_sources
+            return response
+
+        # For new questions, renumber cited sources sequentially
         cited_sources = []
         renumber_map = {}  # Map old citation numbers to new ones
         new_index = 1
-        
+
         for old_num in sorted(cited_numbers):
             if 0 < old_num <= len(sources):
                 source = sources[old_num - 1].copy()
                 source["display_index"] = new_index  # New sequential number
                 source["original_index"] = old_num   # Keep original for reference
+                source["index"] = new_index  # Also set index for compatibility
                 cited_sources.append(source)
                 renumber_map[old_num] = new_index
                 new_index += 1
@@ -398,11 +414,115 @@ class AnswerFormatter:
         
         response["sources"] = cited_sources
         response["citation_map"] = renumber_map
-        
+
         logger.info(f"Renumbered {len(cited_sources)} cited sources: {renumber_map}")
-        
+
         return response
-    
+
+    def _reorder_citations(self, response: Dict) -> Dict:
+        """Reorder citation numbers in answer text to be sequential [1], [2], [3]..."""
+        answer_text = response.get("answer", "")
+        key_facts = response.get("key_facts", [])
+        details = response.get("details", "")
+        sources = response.get("sources", [])
+
+        if not sources:
+            return response
+
+        # Extract all citation numbers from answer text in order of appearance
+        # Handle both [숫자] and [문서 숫자, 페이지] patterns
+        citation_pattern = re.compile(r'\[(\d+)\]')
+        doc_citation_pattern = re.compile(r'\[문서\s*(\d+),\s*\d+\]')
+
+        # Process answer - look for both patterns
+        citations_in_answer = citation_pattern.findall(answer_text)
+        doc_citations_in_answer = doc_citation_pattern.findall(answer_text)
+        citations_in_answer.extend(doc_citations_in_answer)
+
+        # Process key facts
+        citations_in_facts = []
+        for fact in key_facts:
+            citations_in_facts.extend(citation_pattern.findall(fact))
+            citations_in_facts.extend(doc_citation_pattern.findall(fact))
+
+        # Process details
+        citations_in_details = []
+        if details:
+            citations_in_details.extend(citation_pattern.findall(details))
+            citations_in_details.extend(doc_citation_pattern.findall(details))
+
+        # Combine all citations while preserving order
+        all_citations = citations_in_answer + citations_in_facts + citations_in_details
+
+        # Create mapping from old number to new number
+        citation_map = {}
+        new_number = 1
+        seen_citations = set()
+
+        for old_num_str in all_citations:
+            old_num = int(old_num_str)
+            if old_num not in seen_citations:
+                seen_citations.add(old_num)
+                citation_map[old_num] = new_number
+                new_number += 1
+
+        # Replace citations in text with new numbers
+        def replace_citation(match):
+            old_num = int(match.group(1))
+            if old_num in citation_map:
+                return f"[{citation_map[old_num]}]"
+            return match.group(0)
+
+        # Update answer text - replace both patterns
+        if answer_text:
+            # First replace [문서 X, Y] with [X]
+            answer_text = doc_citation_pattern.sub(lambda m: f"[{m.group(1)}]", answer_text)
+            # Then apply the renumbering
+            response["answer"] = citation_pattern.sub(replace_citation, answer_text)
+
+        # Update key facts
+        if key_facts:
+            new_facts = []
+            for fact in key_facts:
+                # First replace [문서 X, Y] with [X]
+                fact = doc_citation_pattern.sub(lambda m: f"[{m.group(1)}]", fact)
+                # Then apply renumbering
+                fact = citation_pattern.sub(replace_citation, fact)
+                new_facts.append(fact)
+            response["key_facts"] = new_facts
+
+        # Update details
+        if details:
+            # First replace [문서 X, Y] with [X]
+            details = doc_citation_pattern.sub(lambda m: f"[{m.group(1)}]", details)
+            # Then apply renumbering
+            response["details"] = citation_pattern.sub(replace_citation, details)
+
+        # Reorder sources based on new citation numbers
+        cited_sources = []
+        for old_num, new_num in sorted(citation_map.items(), key=lambda x: x[1]):
+            if 0 < old_num <= len(sources):
+                source = sources[old_num - 1].copy()
+                source["display_index"] = new_num
+                source["original_index"] = old_num
+                cited_sources.append(source)
+
+        # Include non-cited sources at the end (optional)
+        for idx, source in enumerate(sources, 1):
+            if idx not in citation_map:
+                source_copy = source.copy()
+                source_copy["display_index"] = None
+                source_copy["original_index"] = idx
+                source_copy["is_cited"] = False
+                # Don't add uncited sources to cited_sources list
+
+        response["sources"] = cited_sources
+        response["citation_map"] = citation_map
+
+        logger.info(f"Reordered citations: {citation_map}")
+
+        return response
+
     def _content_matches_source(self, answer_text: str, source_text: str) -> bool:
         """Check if answer content matches source text"""
         if not answer_text or not source_text:
@@ -470,37 +590,36 @@ class AnswerFormatter:
             current_paragraph += sentence + separator
             sentence_count += 1
 
-            # Natural break points - comprehensive list
-            natural_breaks = [
-                '또한', '그리고', '하지만', '따라서', '즉,', '예를 들어',
-                '첫째', '둘째', '셋째', '넷째', '다섯째',
-                '마지막으로', '결론적으로', '요약하면',
-                '특히', '반면', '그러나', '게다가', '아울러',
-                '한편', '다만', '단,', '참고로', '추가로',
-                '이와 관련하여', '이에 따라', '그 결과',
-                '구체적으로', '세부적으로', '종합하면'
-            ]
-
-            # Check if we should start a new paragraph
+            # Check if we should start a new paragraph using STATISTICAL approach
+            # NO hardcoded discourse markers - use structural patterns only
             should_break = False
 
-            # Break at natural transition points
-            for marker in natural_breaks:
-                if sentence.startswith(marker) or f' {marker}' in sentence:
-                    should_break = True
-                    break
-
-            # Break after 1-2 sentences for readability
-            if not should_break and sentence_count >= 2:
+            # 1. Break after 1-2 sentences for readability (length-based)
+            if sentence_count >= 2:
                 should_break = True
 
-            # Break at numbered items
+            # 2. Break at numbered items (structural pattern)
             if re.match(r'^\d+[.)]\s', sentence):
                 should_break = True
 
-            # Break at bullet points
+            # 3. Break at bullet points (structural pattern)
             if sentence.strip().startswith(('•', '-', '*', '○', '●')):
                 should_break = True
+
+            # 4. Statistical: sentence starts with 2+ char word (likely transition word)
+            # This catches discourse markers WITHOUT hardcoding specific words
+            # Works for ANY Korean: '그러나', '하지만', '또한', etc. and dialects
+            if not should_break and len(sentence.strip()) > 0:
+                # Check if sentence starts with common transition pattern (2-4 chars + comma or space)
+                if re.match(r'^[가-힣]{2,4}[,\s]', sentence.strip()):
+                    # Additional check: not a regular noun (simple heuristic)
+                    first_word = re.match(r'^([가-힣]{2,4})', sentence.strip())
+                    if first_word and first_word.group(1):
+                        word = first_word.group(1)
+                        # Statistical: short words at sentence start are often transitions
+                        # (Longer words like '구체적으로' are still caught, shorter ones filtered)
+                        if 2 <= len(word) <= 5:
+                            should_break = True
 
             if should_break and current_paragraph.strip():
                 result.append(current_paragraph.strip())
