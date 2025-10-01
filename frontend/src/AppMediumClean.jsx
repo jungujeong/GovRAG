@@ -6,6 +6,7 @@ import './styles/MediumDesign.css'
 import DocumentDetailsPopup from './components/DocumentDetailsPopup'
 import CitationPopup from './components/CitationPopup'
 import AnswerWithCitations from './components/AnswerWithCitations'
+import SummaryPopup from './components/SummaryPopup'
 import { chatAPI } from './services/chatAPI'
 
 // Configure axios defaults
@@ -49,7 +50,8 @@ function AppMediumClean() {
   // Document details state
   const [showDocDetails, setShowDocDetails] = useState(false)
   const [docDetails, setDocDetails] = useState(null)
-  
+  const [summaryDoc, setSummaryDoc] = useState(null) // For summary popup
+
   // Refs
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -642,7 +644,22 @@ function AppMediumClean() {
     setShowDocDetails(false)
     setDocDetails(null)
   }
-  
+
+  // Handle summary popup
+  const handleShowSummary = (doc) => {
+    // Extract document ID (filename without extension)
+    const docId = doc.filename ? doc.filename.replace(/\.[^/.]+$/, "") : (doc.id || "")
+    setSummaryDoc({
+      id: docId,
+      name: doc.filename || docId,
+      ...doc
+    })
+  }
+
+  const handleCloseSummary = () => {
+    setSummaryDoc(null)
+  }
+
   const handleFileUpload = async (e) => {
     const files = Array.from(e.target.files)
     if (files.length === 0) return
@@ -1191,6 +1208,13 @@ function AppMediumClean() {
                       >
                         상세
                       </button>
+                      <button
+                        className="medium-doc-button"
+                        onClick={() => handleShowSummary(doc)}
+                        title="문서 요약 보기"
+                      >
+                        요약
+                      </button>
                       {(!doc.indexed || doc.status === 'pending') && processingDoc !== doc.id && (
                         <button
                           className="medium-doc-button"
@@ -1234,9 +1258,19 @@ function AppMediumClean() {
       
       {/* Document Details Popup */}
       {showDocDetails && (
-        <DocumentDetailsPopup 
+        <DocumentDetailsPopup
           docDetails={docDetails}
           onClose={handleCloseDocDetails}
+        />
+      )}
+
+      {/* Summary Popup */}
+      {summaryDoc && (
+        <SummaryPopup
+          isOpen={true}
+          documentId={summaryDoc.id}
+          documentName={summaryDoc.name}
+          onClose={handleCloseSummary}
         />
       )}
     </div>
