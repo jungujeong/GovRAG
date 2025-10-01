@@ -15,7 +15,7 @@ class ResponsePostProcessor:
     """Simple postprocessor for RAG responses"""
 
     def __init__(self):
-        self.enabled = True
+        self.enabled = False  # Disabled by default - causes too aggressive token removal
         self._token_pattern = re.compile(r'[가-힣A-Za-z]{2,}')
 
     def process(
@@ -179,3 +179,35 @@ class ResponsePostProcessor:
             return ''
 
         return self._token_pattern.sub(repl, text)
+
+    def _normalize_entity(self, entity: str) -> str:
+        """Normalize entity name for comparison"""
+        if not entity:
+            return ""
+
+        # Convert to lowercase for case-insensitive comparison
+        normalized = entity.lower()
+
+        # Remove common punctuation
+        normalized = re.sub(r'[.,!?;:]', '', normalized)
+
+        # Normalize whitespace
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        return normalized
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize general text for comparison"""
+        if not text:
+            return ""
+
+        # Convert to lowercase
+        normalized = text.lower()
+
+        # Remove punctuation
+        normalized = re.sub(r'[^\w\s가-힣]', '', normalized)
+
+        # Normalize whitespace
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        return normalized

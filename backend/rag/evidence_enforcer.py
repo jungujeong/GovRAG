@@ -11,11 +11,10 @@ class EvidenceEnforcer:
     """Enforce evidence-only generation with verification"""
     
     def __init__(self):
-        # Very low thresholds for small models like qwen3:4b
-        # Essentially bypassing enforcement for now
-        self.jaccard_threshold = 0.01  # Almost disabled
-        self.sent_sim_threshold = 0.1  # Very relaxed
-        self.confidence_min = 0.05  # Minimal confidence required
+        # Balanced thresholds to prevent hallucination while allowing valid responses
+        self.jaccard_threshold = 0.55  # Strong evidence overlap required
+        self.sent_sim_threshold = 0.75  # High sentence similarity required
+        self.confidence_min = 0.60  # Solid confidence required
     
     def verify_response(self,
                        response: Dict,

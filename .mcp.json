@@ -1,13 +1,17 @@
 {
   "mcpServers": {
-    "browser-server": {
-      "command": "mcp-server-browser"
-    },
     "playwright": {
       "command": "npx",
       "args": [
         "-y",
         "@executeautomation/playwright-mcp-server"
+      ]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
       ]
     }
   }

@@ -11,6 +11,7 @@ import logging
 
 from config import config
 from utils.index_integrity import IndexIntegrityChecker, safe_index_operation
+from rag.korean_analyzer import get_korean_analyzer as get_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class WhooshBM25:
         self.index = None
         self.schema = self._create_schema()
         self.integrity_checker = IndexIntegrityChecker(self.index_dir / "main")
+        self.korean_analyzer = get_analyzer()  # Initialize Korean morphological analyzer
         self._open_or_create_index()
     
     def _create_schema(self) -> Schema:
@@ -162,12 +164,12 @@ class WhooshBM25:
                 raise
     
     def search(self, query: str, limit: int = None) -> List[Dict]:
-        """Search using BM25 scoring"""
+        """Search using BM25 scoring with Korean morphological analysis"""
         if limit is None:
             limit = config.TOPK_BM25
-        
+
         results = []
-        
+
         try:
             with self.index.searcher(weighting=BM25F()) as searcher:
                 # Parse query
@@ -176,14 +178,18 @@ class WhooshBM25:
                     schema=self.schema,
                     group=qparser.OrGroup
                 )
-                
+
+                # Preprocess query with Korean Analyzer (extract content words, remove particles)
+                processed_query = self.korean_analyzer.create_search_query(query)
+                logger.debug(f"Korean Analyzer: '{query}' → '{processed_query}'")
+
                 # Clean query for Whoosh
-                clean_query = self._clean_query(query)
+                clean_query = self._clean_query(processed_query)
                 parsed_query = parser.parse(clean_query)
-                
+
                 # Execute search
                 search_results = searcher.search(parsed_query, limit=limit)
-                
+
                 # Format results
                 for hit in search_results:
                     results.append({
@@ -196,12 +202,12 @@ class WhooshBM25:
                         "type": hit.get("type", "content"),
                         "score": hit.score
                     })
-                
-                logger.info(f"BM25 search found {len(results)} results for: {query[:50]}...")
-                
+
+                logger.info(f"BM25 search found {len(results)} results for: {query[:50]}... (processed: {processed_query[:50]}...)")
+
         except Exception as e:
             logger.error(f"Search failed: {e}")
-        
+
         return results
     
     def _clean_query(self, query: str) -> str:

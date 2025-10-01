@@ -114,7 +114,18 @@ class CitationTracker:
 
             # Format source list
             formatted_sources = self._format_sources(sources, evidences)
-            response["sources"] = self._dedupe_sources(formatted_sources)
+            logger.info(f"[track_citations] After _format_sources: {len(formatted_sources)} sources")
+            if formatted_sources:
+                logger.info(f"[track_citations] First formatted source keys: {formatted_sources[0].keys()}")
+                logger.info(f"[track_citations] First formatted source: {formatted_sources[0]}")
+
+            deduped_sources = self._dedupe_sources(formatted_sources)
+            logger.info(f"[track_citations] After _dedupe_sources: {len(deduped_sources)} sources")
+            if deduped_sources:
+                logger.info(f"[track_citations] First deduped source keys: {deduped_sources[0].keys()}")
+                logger.info(f"[track_citations] First deduped source: {deduped_sources[0]}")
+
+            response["sources"] = deduped_sources
 
             # Store the citation map for future use
             response["citation_map"] = used_citation_map
@@ -346,51 +357,70 @@ class CitationTracker:
         ratio = fuzz.partial_ratio(text1, text2) / 100.0
         return ratio >= threshold
     
-    def _format_sources(self, 
+    def _format_sources(self,
                        sources: List[Dict],
                        evidences: List[Dict]) -> List[Dict]:
         """Format source citations with full information"""
-        
+
+        logger.info(f"[_format_sources] Input - sources: {len(sources)}, evidences: {len(evidences)}")
+        if sources:
+            logger.info(f"[_format_sources] First source keys: {sources[0].keys() if sources else 'N/A'}")
+
         formatted = []
-        
+
         # If sources are empty, create from evidences
         if not sources and evidences:
+            logger.info("[_format_sources] Branch: Creating sources from evidences")
             for idx, evidence in enumerate(evidences, 1):
                 formatted.append({
                     "index": idx,
+                    "citation_number": idx,  # Add citation_number field
                     "doc_id": evidence.get("doc_id", "unknown"),
                     "page": evidence.get("page", 0),
                     "start_char": evidence.get("start_char", -1),
                     "end_char": evidence.get("end_char", -1),
                     "chunk_id": evidence.get("chunk_id", ""),
-                    "text_snippet": evidence.get("text", "")
+                    "text_snippet": evidence.get("text", ""),
+                    "score": evidence.get("score", evidence.get("normalized_score", 0.0))  # Add score
                 })
         else:
+            logger.info("[_format_sources] Branch: Enhancing existing sources with evidence data")
             # Enhance existing sources with evidence data
+            idx = 1
             for source in sources:
                 doc_id = source.get("doc_id")
                 page = source.get("page", 0)
-                
+
                 # Find matching evidence
                 matching_evidence = None
                 for evidence in evidences:
-                    if (evidence.get("doc_id") == doc_id and 
+                    if (evidence.get("doc_id") == doc_id and
                         evidence.get("page", 0) == page):
                         matching_evidence = evidence
                         break
-                
+
                 if matching_evidence:
                     formatted.append({
+                        "index": idx,  # Add index
+                        "citation_number": idx,  # Add citation_number
                         "doc_id": doc_id,
                         "page": page,
                         "start_char": matching_evidence.get("start_char", -1),
                         "end_char": matching_evidence.get("end_char", -1),
                         "chunk_id": matching_evidence.get("chunk_id", ""),
-                        "text_snippet": matching_evidence.get("text", "")
+                        "text_snippet": matching_evidence.get("text", ""),
+                        "score": matching_evidence.get("score", matching_evidence.get("normalized_score", 0.0))  # Add score
                     })
+                    idx += 1
                 else:
-                    formatted.append(source)
-        
+                    # No matching evidence, still add index
+                    formatted.append({
+                        "index": idx,
+                        "citation_number": idx,
+                        **source
+                    })
+                    idx += 1
+
         return formatted
     
     def _split_sentences(self, text: str) -> List[str]:

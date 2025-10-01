@@ -19,6 +19,9 @@ class Citation(BaseModel):
     end_char: int
     chunk_id: Optional[str] = None
     text_snippet: Optional[str] = None
+    index: Optional[int] = None
+    citation_number: Optional[int] = None
+    score: Optional[float] = None
 
 class QueryResponse(BaseModel):
     """Query response schema"""
