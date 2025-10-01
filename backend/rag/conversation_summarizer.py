@@ -85,10 +85,14 @@ class ConversationSummarizer:
         return re.sub(r"\[[0-9]+\]", "", text)
 
     def _extract_entities(self, messages: List[Dict[str, str]]) -> List[str]:
+        """
+        Extract entities using STATISTICAL approach - NO HARDCODED patterns.
+
+        Strategy: Extract content words automatically using morphological heuristics.
+        Works for ANY domain (departments, locations, organizations, etc.) without
+        hardcoding specific suffixes or entity types.
+        """
         entities: List[str] = []
-        # 부서명 패턴 + 주요 개체명 패턴
-        dept_pattern = re.compile(r"([가-힣A-Za-z]+(?:과|부|국|처|실|단|팀|센터))")
-        entity_pattern = re.compile(r"([가-힣]{2,}(?:예술촌|문화마을|산업단지|공단|상권|함박천))")
 
         for message in messages:
             if message.get("role") != "assistant":
@@ -97,19 +101,75 @@ class ConversationSummarizer:
             # Remove citation markers like [1]
             content = re.sub(r"\[[0-9]+\]", "", content)
 
-            # 부서명 추출
-            for match in dept_pattern.findall(content):
-                cleaned = match.strip().strip(',')
-                if cleaned and cleaned not in entities:
-                    entities.append(cleaned)
+            # Extract ALL Korean words (3+ chars for meaningful entities)
+            # NO domain-specific patterns - pure statistical extraction
+            words = re.findall(r'[가-힣A-Za-z]{3,}', content)
 
-            # 주요 개체명 추출
-            for match in entity_pattern.findall(content):
-                cleaned = match.strip().strip(',')
-                if cleaned and cleaned not in entities:
-                    entities.append(cleaned)
+            for word in words:
+                # Filter using morphological heuristics (NO domain knowledge)
+                if self._is_likely_entity(word):
+                    cleaned = word.strip().strip(',')
+                    if cleaned and cleaned not in entities:
+                        entities.append(cleaned)
 
-        return entities
+        # Apply statistical clustering to normalize variants
+        # Example: "문화과", "문화과에서" -> "문화과"
+        return self._normalize_entities_statistical(entities)
+
+    def _is_likely_entity(self, word: str) -> bool:
+        """
+        Check if word is likely an entity using STATISTICAL heuristics.
+        NO hardcoded patterns - works for any Korean domain.
+        """
+        # Length-based: entities tend to be 3+ chars
+        if len(word) < 3:
+            return False
+
+        # Skip common verb/adjective endings (linguistic features, not domain-specific)
+        if any(word.endswith(ending) for ending in ['하다', '되다', '이다', '한다', '된다', '합니다']):
+            return False
+
+        # Skip question patterns (linguistic features)
+        if any(pattern in word for pattern in ['어떻', '무엇', '어디', '언제']):
+            return False
+
+        # Keep all other content words
+        return True
+
+    def _normalize_entities_statistical(self, entities: List[str]) -> List[str]:
+        """
+        Normalize entity variants using SUBSTRING CLUSTERING.
+        Same approach as query_rewriter.py - pure statistics, no hardcoding.
+        """
+        if not entities:
+            return []
+
+        # Build clusters: entities with substring overlap belong to same cluster
+        clusters = []
+        for entity in entities:
+            matched_cluster = None
+            for cluster in clusters:
+                for existing in cluster:
+                    # Substring overlap detection
+                    if entity in existing or existing in entity:
+                        matched_cluster = cluster
+                        break
+                if matched_cluster:
+                    break
+
+            if matched_cluster:
+                matched_cluster.add(entity)
+            else:
+                clusters.append({entity})
+
+        # Select canonical form from each cluster (shortest = root)
+        normalized = []
+        for cluster in clusters:
+            cluster_list = list(cluster)
+            canonical = min(cluster_list, key=lambda x: (len(x), entities.index(x) if x in entities else 999))
+            normalized.append(canonical)
+
+        return normalized
 
     def _merge_entities(self, previous: List[str], current: List[str]) -> List[str]:
         merged: List[str] = []

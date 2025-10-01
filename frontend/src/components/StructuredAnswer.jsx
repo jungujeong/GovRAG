@@ -6,6 +6,20 @@ function StructuredAnswer({ answer }) {
   const [copySuccess, setCopySuccess] = useState(false)
   const [highlightedCitation, setHighlightedCitation] = useState(null)
   const [citationPreview, setCitationPreview] = useState(null)
+
+  const metadata = (answer && answer.metadata) || {}
+  const docScope = metadata.doc_scope || {}
+  const resolvedDocs = docScope.resolved_doc_ids || docScope.doc_scope_ids || []
+  const requestedDocs = docScope.requested_doc_ids || []
+  const averageScore = typeof docScope.average_score === 'number' ? docScope.average_score : null
+  const topicChanged = !!docScope.topic_change_detected
+  const topicReason = docScope.topic_change_reason
+
+  const formattedAnswer = metadata.formatted_text || answer?.formatted_text || answer?.answer || ''
+  const rawAnswer = metadata.raw_answer ?? answer?.answer ?? ''
+  const keyFacts = Array.isArray(answer?.key_facts) ? answer.key_facts : (Array.isArray(metadata.key_facts) ? metadata.key_facts : [])
+  const detailsText = answer?.details ?? metadata.details ?? ''
+  const sources = Array.isArray(answer?.sources) ? answer.sources : []
   
   // Enhanced markdown renderer with comprehensive formatting
   const renderMarkdown = (text) => {
@@ -140,10 +154,14 @@ function StructuredAnswer({ answer }) {
   
   // Handle citation click
   const handleCitationClick = (citationNum) => {
-    const sources = answer.sources || []
-    // Find source by display_index (the renumbered sequential index)
-    const source = sources.find(s => s.display_index === citationNum)
-    
+    const availableSources = sources || []
+    // Find source by display_index (the renumbered sequential index) or index
+    const source = availableSources.find(s =>
+      s.display_index === citationNum ||
+      s.index === citationNum ||
+      (s.display_index === undefined && s.index === undefined && availableSources.indexOf(s) === citationNum - 1)
+    )
+
     if (source) {
       // Toggle highlight and preview
       if (highlightedCitation === citationNum) {
@@ -154,7 +172,7 @@ function StructuredAnswer({ answer }) {
         setCitationPreview(source)
       }
     } else {
-      console.warn(`Citation [${citationNum}] not found`)
+      console.warn(`Citation [${citationNum}] not found in sources:`, availableSources)
     }
   }
   
@@ -190,7 +208,30 @@ function StructuredAnswer({ answer }) {
           </div>
         )}
       </div>
-      
+
+      {(resolvedDocs.length > 0 || requestedDocs.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2 mb-4 text-sm text-gray-600">
+          <span className="font-medium">참조 문서</span>
+          {resolvedDocs.length > 0 ? (
+            resolvedDocs.map((docId) => (
+              <span
+                key={`resolved-pill-${docId}`}
+                className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200"
+              >
+                {docId}
+              </span>
+            ))
+          ) : (
+            <span className="text-gray-400">없음</span>
+          )}
+          {topicChanged && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+              🔄 주제 확장{topicReason ? ` (${topicReason})` : ''}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Core Answer */}
       <div className="answer-section">
         <div className="mb-6 p-5 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border-l-4 border-blue-500 shadow-sm">
@@ -199,7 +240,7 @@ function StructuredAnswer({ answer }) {
               📌 핵심 답변
             </h3>
             <button
-              onClick={() => copyToClipboard(answer.answer || '')}
+              onClick={() => copyToClipboard(rawAnswer)}
               className={`copy-button ${copySuccess ? 'copy-button-success' : ''}`}
               title="답변 복사"
             >
@@ -221,17 +262,17 @@ function StructuredAnswer({ answer }) {
             </button>
           </div>
           <div className="answer-content text-lg">
-            {renderMarkdown(answer.answer) || '답변을 생성할 수 없습니다.'}
+            {renderMarkdown(formattedAnswer) || '답변을 생성할 수 없습니다.'}
           </div>
         </div>
       </div>
       
       {/* Key Facts */}
-      {answer.key_facts && answer.key_facts.length > 0 && (
+      {keyFacts.length > 0 && (
         <div className="answer-section">
           <h3 className="answer-title mb-4">📊 주요 사실</h3>
           <div className="space-y-3">
-            {answer.key_facts.map((fact, index) => (
+            {keyFacts.map((fact, index) => (
               <div 
                 key={index}
                 className="fact-item"
@@ -245,27 +286,27 @@ function StructuredAnswer({ answer }) {
       )}
       
       {/* Detailed Explanation */}
-      {answer.details && (
+      {detailsText && (
         <div className="answer-section">
           <h3 className="answer-title mb-4">📝 상세 설명</h3>
           <div className="answer-content p-4 bg-gray-50 rounded-lg">
-            {renderMarkdown(answer.details)}
+            {renderMarkdown(detailsText)}
           </div>
         </div>
       )}
       
       {/* Sources - Already filtered by backend */}
-      {answer.sources && answer.sources.length > 0 && (
+      {sources.length > 0 && (
         <div className="border-t pt-4">
           <h3 className="text-xl font-semibold mb-3">📚 출처</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {answer.sources.map((source, index) => {
+            {sources.map((source, index) => {
               // Use display_index for the renumbered citation
-              const displayIndex = source.display_index || (index + 1)
+              const displayIndex = source.display_index || source.index || (index + 1)
               return (
                 <button
-                  key={displayIndex}
-                  onClick={() => setSelectedCitation(source)}
+                  key={`source-${displayIndex}-${index}`}
+                  onClick={() => handleCitationClick(displayIndex)}
                   className="text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors group"
                 >
                   <div className="flex items-start">
@@ -301,13 +342,38 @@ function StructuredAnswer({ answer }) {
       )}
       
       {/* Metadata */}
-      {answer.metadata && (
-        <div className="mt-6 pt-4 border-t text-sm text-gray-500">
-          <p>증거 문서: {answer.metadata.evidence_count}개</p>
-          {answer.metadata.hallucination_detected && (
-            <p className="text-red-600 font-semibold">
-              ⚠️ 할루시네이션 감지됨
-            </p>
+      {metadata && (
+        <div className="mt-6 pt-4 border-t text-sm text-gray-500 space-y-3">
+          <div>
+            <p>증거 문서: {metadata.evidence_count ?? sources.length}개</p>
+            {metadata.hallucination_detected && (
+              <p className="text-red-600 font-semibold">⚠️ 할루시네이션 감지됨</p>
+            )}
+          </div>
+
+          {metadata.grounding && metadata.grounding.length > 0 && (
+            <div className="text-gray-600">
+              <p>정렬된 문장 수: {metadata.grounding.length}개</p>
+            </div>
+          )}
+
+          {requestedDocs.length > 0 && (
+            <div className="text-gray-600">
+              <span className="text-gray-500 mr-2">요청 문서</span>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {requestedDocs.map((docId) => (
+                  <span key={`metadata-requested-${docId}`} className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-xs">
+                    {docId}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {averageScore !== null && (
+            <div className="text-xs text-gray-500">
+              평균 스코어: {(averageScore * 100).toFixed(1)}%
+            </div>
           )}
         </div>
       )}
@@ -318,7 +384,7 @@ function StructuredAnswer({ answer }) {
           <div className="flex items-start justify-between mb-3">
             <div className="flex items-center">
               <span className="text-blue-600 font-bold mr-2">
-                [{citationPreview.display_index || (answer.sources.indexOf(citationPreview) + 1)}]
+                [{citationPreview.display_index || citationPreview.index || highlightedCitation}]
               </span>
               <h4 className="font-semibold text-gray-900">
                 {citationPreview.doc_id}

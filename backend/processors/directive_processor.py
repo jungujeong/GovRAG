@@ -303,7 +303,7 @@ class DirectiveProcessor:
         doc = fitz.open(str(pdf_path))
         
         result = {
-            "doc_id": pdf_path.stem,
+            "doc_id": pdf_path.name,  # Use name instead of stem to include extension
             "file_path": str(pdf_path),
             "pages": [],
             "directives": [],  # 구조화된 지시사항 리스트

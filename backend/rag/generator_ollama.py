@@ -175,41 +175,41 @@ class OllamaGenerator:
         return result
     
     def _clean_non_korean(self, text: str) -> str:
-        """Remove non-Korean language content using Unicode ranges"""
+        """Remove non-Korean content while preserving line breaks and spacing semantics."""
         if not text:
             return text
-        
-        # Define allowed Unicode ranges
-        # Korean characters: Hangul Syllables (AC00-D7AF), Jamo (1100-11FF, 3130-318F, A960-A97F, D7B0-D7FF)
-        # Also keep ASCII printable characters (0020-007E) for numbers, basic punctuation, and English names
-        # Add common punctuation that might be used in Korean text
-        allowed_chars = []
-        
-        for char in text:
-            code = ord(char)
-            # Keep Korean characters
-            if (0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
+
+        out_chars = []
+        for ch in text:
+            # Preserve newlines and tabs to avoid merging tokens across lines
+            if ch in ('\n', '\t'):
+                out_chars.append(ch)
+                continue
+            code = ord(ch)
+            if (
+                0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
                 0x1100 <= code <= 0x11FF or  # Hangul Jamo
                 0x3130 <= code <= 0x318F or  # Hangul Compatibility Jamo
                 0xA960 <= code <= 0xA97F or  # Hangul Jamo Extended-A
-                0xD7B0 <= code <= 0xD7FF):   # Hangul Jamo Extended-B
-                allowed_chars.append(char)
-            # Keep ASCII printable characters (space to ~)
-            elif 0x0020 <= code <= 0x007E:
-                allowed_chars.append(char)
-            # Keep common Korean punctuation
-            elif char in '·、。「」『』〈〉《》【】〔〕':
-                allowed_chars.append(char)
-            # Replace other characters with space to maintain word boundaries
+                0xD7B0 <= code <= 0xD7FF     # Hangul Jamo Extended-B
+            ):
+                out_chars.append(ch)
+            elif 0x0020 <= code <= 0x007E:  # Basic ASCII printable
+                out_chars.append(ch)
+            elif ch in '·、。「」『』〈〉《》【】〔〕':
+                out_chars.append(ch)
             else:
-                allowed_chars.append(' ')
-        
-        result = ''.join(allowed_chars)
-        
-        # Clean up multiple spaces
-        result = re.sub(r'\s+', ' ', result)
-        
-        return result.strip()
+                out_chars.append(' ')
+
+        # Collapse spaces per line but preserve line boundaries
+        cleaned_lines = []
+        for line in ''.join(out_chars).splitlines(True):  # keepends=True
+            # Replace runs of spaces/tabs with a single space
+            replaced = re.sub(r'[ \t]+', ' ', line)
+            cleaned_lines.append(replaced)
+
+        result = ''.join(cleaned_lines)
+        return result.strip('\n')
     
     def _parse_source(self, line: str) -> Optional[Dict]:
         """Parse source citation line"""
@@ -240,11 +240,14 @@ class OllamaGenerator:
         
         return None
     
-    async def generate_with_context(self,
-                                   query: str,
-                                   evidences: List[Dict],
-                                   context: Optional[List[Dict]] = None,
-                                   stream: bool = False) -> Dict:
+    async def generate_with_context(
+        self,
+        query: str,
+        evidences: List[Dict],
+        context: Optional[List[Dict]] = None,
+        doc_scope: Optional[Dict] = None,
+        stream: bool = False,
+    ) -> Dict:
         """Generate response with conversation context"""
 
         # 항상 컨텍스트를 포함하여 LLM이 질문 유형을 판단하도록 함
@@ -252,7 +255,13 @@ class OllamaGenerator:
 
         # Format prompt with context - 항상 컨텍스트 포함
         system_prompt = PromptTemplates.get_system_prompt(evidences)
-        user_prompt = PromptTemplates.format_user_prompt(query, evidences, context, is_meta_query=False)
+        user_prompt = PromptTemplates.format_user_prompt(
+            query,
+            evidences,
+            context,
+            is_meta_query=False,
+            doc_scope_metadata=doc_scope,
+        )
 
         # Build message list - 시스템 프롬프트와 사용자 프롬프트만 사용
         # 컨텍스트는 user_prompt에 이미 포함되어 있음
@@ -280,11 +289,14 @@ class OllamaGenerator:
             logger.error(f"Generation with context failed: {e}")
             raise
 
-    async def stream_with_context(self,
-                                 query: str,
-                                 evidences: List[Dict],
-                                 context: Optional[List[Dict]] = None,
-                                 cancel_event: Optional[asyncio.Event] = None) -> AsyncIterator[str]:
+    async def stream_with_context(
+        self,
+        query: str,
+        evidences: List[Dict],
+        context: Optional[List[Dict]] = None,
+        doc_scope: Optional[Dict] = None,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> AsyncIterator[str]:
         """Stream response with conversation context"""
 
         # 항상 컨텍스트를 포함하여 LLM이 질문 유형을 판단하도록 함
@@ -292,7 +304,22 @@ class OllamaGenerator:
 
         # Format prompt with context - 항상 컨텍스트 포함
         system_prompt = PromptTemplates.get_system_prompt(evidences)
-        user_prompt = PromptTemplates.format_user_prompt(query, evidences, context, is_meta_query=False)
+        user_prompt = PromptTemplates.format_user_prompt(
+            query,
+            evidences,
+            context,
+            is_meta_query=False,
+            doc_scope_metadata=doc_scope,
+        )
+
+        # DEBUG: Log the exact prompts being sent
+        logger.info("="*80)
+        logger.info("DEBUG: EXACT PROMPT BEING SENT TO OLLAMA")
+        logger.info("="*80)
+        logger.info(f"System Prompt:\n{system_prompt[:500]}...")
+        logger.info("-"*40)
+        logger.info(f"User Prompt:\n{user_prompt[:1000]}...")
+        logger.info("="*80)
 
         # Build message list - 시스템 프롬프트와 사용자 프롬프트만 사용
         # 컨텍스트는 user_prompt에 이미 포함되어 있음
@@ -320,6 +347,9 @@ class OllamaGenerator:
                 ) as response:
                     response.raise_for_status()
 
+                    # DEBUG: Collect raw response for logging
+                    raw_response_parts = []
+
                     async for line in response.aiter_lines():
                         # Check cancellation
                         if cancel_event and cancel_event.is_set():
@@ -329,9 +359,20 @@ class OllamaGenerator:
                             try:
                                 data = json.loads(line)
                                 if data.get("message", {}).get("content"):
-                                    yield data["message"]["content"]
+                                    content = data["message"]["content"]
+                                    raw_response_parts.append(content)
+                                    yield content
                             except json.JSONDecodeError:
                                 continue
+
+                    # DEBUG: Log the complete raw response
+                    if raw_response_parts:
+                        full_raw_response = ''.join(raw_response_parts)
+                        logger.info("="*80)
+                        logger.info("DEBUG: RAW MODEL RESPONSE FROM OLLAMA")
+                        logger.info("="*80)
+                        logger.info(f"{full_raw_response[:2000]}...")
+                        logger.info("="*80)
 
         except Exception as e:
             logger.error(f"Stream generation with context failed: {e}")

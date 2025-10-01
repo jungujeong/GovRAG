@@ -330,7 +330,7 @@ async def index_all_documents():
     
     # Get index statistics
     whoosh_stats = indexer.whoosh.get_stats()
-    logger.info(f"Whoosh index: {whoosh_stats.get('doc_count', 0)} documents")
+    logger.info(f"Whoosh index: {whoosh_stats.get('total_documents', 0)} documents")
     
     return results
 

@@ -1,304 +1,255 @@
 """
-Topic change detection using embedding similarity and retrieval scores.
-No hardcoded patterns or keywords - uses semantic similarity instead.
+Enhanced topic change detection using retrieval metrics.
+No hardcoded keywords; relies on evidence statistics and document overlap.
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any, Sequence
 import logging
-from typing import List, Dict, Optional, Tuple
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TopicChangeAnalysis:
+    """Result payload describing whether a topic change is likely."""
+
+    changed: bool
+    reason: str
+    overlap_ratio: float
+    suggested_doc_ids: List[str] = field(default_factory=list)
+    metrics: Dict[str, float] = field(default_factory=dict)
+    primary_doc_ids: List[str] = field(default_factory=list)
+    expanded_doc_ids: List[str] = field(default_factory=list)
+    unbounded_doc_ids: List[str] = field(default_factory=list)
+
+
 class TopicChangeDetector:
-    """Detects topic changes using embedding similarity and retrieval confidence"""
+    """Detects topic changes using retrieval scores and document overlap."""
 
     def __init__(
         self,
         similarity_threshold: float = 0.3,
         retrieval_confidence_threshold: float = 0.2,
-        min_score_threshold: float = 0.1
-    ):
-        """
-        Initialize topic change detector.
+        min_score_threshold: float = 0.1,
+    ) -> None:
+        """Configure detector thresholds.
 
         Args:
-            similarity_threshold: Min cosine similarity to consider same topic
-            retrieval_confidence_threshold: Min retrieval score to consider relevant
-            min_score_threshold: Absolute minimum score for any relevance
+            similarity_threshold: Reserved for embedding-based checks (not yet used)
+            retrieval_confidence_threshold: Required improvement to treat other docs as better
+            min_score_threshold: Minimum acceptable evidence score for in-scope retrieval
         """
         self.similarity_threshold = similarity_threshold
         self.retrieval_confidence_threshold = retrieval_confidence_threshold
         self.min_score_threshold = min_score_threshold
 
-    def detect_topic_change(
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def analyze(
         self,
-        current_query: str,
-        previous_context: List[Dict],
-        evidences_from_previous: List[Dict],
-        evidences_from_all: Optional[List[Dict]] = None
-    ) -> Tuple[bool, str, Optional[List[str]]]:
-        """
-        Detect if the current query represents a topic change.
+        *,
+        query: str,
+        previous_doc_ids: Sequence[str],
+        scoped_evidences: Sequence[Dict[str, Any]],
+        expanded_evidences: Optional[Sequence[Dict[str, Any]]] = None,
+        unbounded_evidences: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> TopicChangeAnalysis:
+        """Analyse whether the query should step outside the previous scope.
 
         Args:
-            current_query: Current user query
-            previous_context: Previous conversation messages
-            evidences_from_previous: Search results from previous documents
-            evidences_from_all: Search results from all documents (optional)
+            query: Current natural language question (unused but logged for traceability)
+            previous_doc_ids: Document IDs that define the current scope
+            scoped_evidences: Retrieval results restricted to the previous scope
+            expanded_evidences: Retrieval results from a wider scope (e.g., session docs)
+            unbounded_evidences: Retrieval results without any filter (optional)
 
         Returns:
-            Tuple of (is_topic_changed, reason, suggested_new_doc_ids)
+            TopicChangeAnalysis describing change decision and supporting metrics
         """
+        previous_scope = set(self._sanitize_doc_ids(previous_doc_ids))
 
-        # Check retrieval confidence from previous documents
-        if not evidences_from_previous:
-            logger.info("No evidences from previous documents - potential topic change")
-
-            # If we have results from all documents, suggest those
-            if evidences_from_all:
-                new_doc_ids = self._extract_unique_doc_ids(evidences_from_all)
-                return (
-                    True,
-                    "no_relevant_content_in_previous",
-                    new_doc_ids
-                )
-            return (True, "no_relevant_content", None)
-
-        # Calculate average retrieval score (normalized)
-        avg_score = self._calculate_average_score(evidences_from_previous)
-
-        # Get top scores for better comparison
-        top_score_prev = self._get_top_score(evidences_from_previous)
-
-        logger.info(f"Previous docs - avg score: {avg_score:.3f}, top score: {top_score_prev:.3f}")
-
-        # Very low scores indicate topic change
-        if avg_score < self.min_score_threshold or top_score_prev < self.min_score_threshold * 2:
-            logger.info(f"Very low retrieval scores - strong topic change signal")
-
-            if evidences_from_all:
-                new_doc_ids = self._extract_unique_doc_ids(evidences_from_all)
-                return (
-                    True,
-                    "low_confidence_scores",
-                    new_doc_ids
-                )
-            return (True, "low_confidence_scores", None)
-
-        # Check if better results exist in other documents
-        if evidences_from_all:
-            avg_score_all = self._calculate_average_score(evidences_from_all)
-            top_score_all = self._get_top_score(evidences_from_all)
-
-            # Compare both average and top scores
-            avg_improvement = avg_score_all - avg_score
-            top_improvement = top_score_all - top_score_prev
-
-            logger.info(f"All docs - avg score: {avg_score_all:.3f}, top score: {top_score_all:.3f}")
-            logger.info(f"Score improvements - avg: {avg_improvement:.3f}, top: {top_improvement:.3f}")
-
-            # Check if results from other documents are significantly better
-            if (avg_improvement > self.retrieval_confidence_threshold or
-                top_improvement > self.retrieval_confidence_threshold * 1.5):
-
-                logger.info(f"Much better results in other documents - topic change detected")
-
-                # Get new document IDs that aren't in previous
-                previous_doc_ids = self._extract_unique_doc_ids(evidences_from_previous)
-                all_doc_ids = self._extract_unique_doc_ids(evidences_from_all)
-                new_doc_ids = [doc_id for doc_id in all_doc_ids if doc_id not in previous_doc_ids]
-
-                # Additional check: Are top results mostly from new documents?
-                top_all_docs = self._get_top_doc_ids(evidences_from_all, top_n=5)
-                new_in_top = [doc for doc in top_all_docs if doc not in previous_doc_ids]
-
-                if len(new_in_top) >= 3:  # Most top results are from new docs
-                    logger.info(f"Top results mostly from new documents: {new_in_top}")
-                    return (
-                        True,
-                        "better_results_elsewhere",
-                        new_doc_ids if new_doc_ids else new_in_top
-                    )
-
-        # Check semantic similarity with context (if embeddings available)
-        if self._has_embeddings(evidences_from_previous):
-            similarity = self._calculate_context_similarity(
-                evidences_from_previous,
-                previous_context
-            )
-
-            if similarity < self.similarity_threshold:
-                logger.info(
-                    f"Low semantic similarity ({similarity:.3f}) with previous context - topic change"
-                )
-
-                if evidences_from_all:
-                    new_doc_ids = self._extract_unique_doc_ids(evidences_from_all)
-                    return (
-                        True,
-                        "low_semantic_similarity",
-                        new_doc_ids
-                    )
-                return (True, "low_semantic_similarity", None)
-
-        # No topic change detected
-        return (False, "same_topic", None)
-
-    def _calculate_average_score(self, evidences: List[Dict]) -> float:
-        """Calculate average retrieval score from evidences"""
-        if not evidences:
-            return 0.0
-
-        scores = []
-        for evidence in evidences:
-            # Try different score fields that might exist
-            score = evidence.get("score", evidence.get("similarity", evidence.get("relevance", 0.0)))
-            # Normalize score to 0-1 range if needed
-            if score > 1.0:
-                score = score / 100.0  # Assume percentage
-            scores.append(float(score))
-
-        return np.mean(scores) if scores else 0.0
-
-    def _get_top_score(self, evidences: List[Dict]) -> float:
-        """Get the highest score from evidences"""
-        if not evidences:
-            return 0.0
-
-        scores = []
-        for evidence in evidences:
-            score = evidence.get("score", evidence.get("similarity", evidence.get("relevance", 0.0)))
-            # Normalize score to 0-1 range if needed
-            if score > 1.0:
-                score = score / 100.0
-            scores.append(float(score))
-
-        return max(scores) if scores else 0.0
-
-    def _get_top_doc_ids(self, evidences: List[Dict], top_n: int = 5) -> List[str]:
-        """Get document IDs from top N evidences by score"""
-        if not evidences:
-            return []
-
-        # Sort evidences by score
-        scored_evidences = []
-        for evidence in evidences:
-            score = evidence.get("score", evidence.get("similarity", evidence.get("relevance", 0.0)))
-            if score > 1.0:
-                score = score / 100.0
-            scored_evidences.append((score, evidence))
-
-        scored_evidences.sort(key=lambda x: x[0], reverse=True)
-
-        # Extract doc_ids from top N
-        doc_ids = []
-        seen = set()
-        for _, evidence in scored_evidences[:top_n]:
-            doc_id = evidence.get("doc_id")
-            if doc_id and doc_id not in seen:
-                doc_ids.append(doc_id)
-                seen.add(doc_id)
-
-        return doc_ids
-
-    def _extract_unique_doc_ids(self, evidences: List[Dict]) -> List[str]:
-        """Extract unique document IDs from evidences"""
-        doc_ids = []
-        seen = set()
-
-        for evidence in evidences:
-            doc_id = evidence.get("doc_id")
-            if doc_id and doc_id not in seen:
-                doc_ids.append(doc_id)
-                seen.add(doc_id)
-
-        return doc_ids
-
-    def _has_embeddings(self, evidences: List[Dict]) -> bool:
-        """Check if evidences have embedding vectors"""
-        if not evidences:
-            return False
-
-        return any(
-            "embedding" in e or "vector" in e
-            for e in evidences
+        analysis = TopicChangeAnalysis(
+            changed=False,
+            reason="within_scope",
+            overlap_ratio=1.0,
         )
 
-    def _calculate_context_similarity(
-        self,
-        evidences: List[Dict],
-        previous_context: List[Dict]
-    ) -> float:
-        """
-        Calculate semantic similarity between current evidences and previous context.
-        This is a placeholder - actual implementation would use embeddings.
-        """
-        # For now, return a default value indicating we can't calculate
-        # In a real implementation, this would:
-        # 1. Get embeddings for current evidences
-        # 2. Get embeddings for previous context
-        # 3. Calculate cosine similarity
-        return 0.5  # Neutral value - neither high nor low
+        analysis.primary_doc_ids = self._unique_doc_ids(scoped_evidences)
+        analysis.expanded_doc_ids = self._unique_doc_ids(expanded_evidences)
+        analysis.unbounded_doc_ids = self._unique_doc_ids(unbounded_evidences)
 
-    def suggest_action(
-        self,
-        is_topic_changed: bool,
-        reason: str,
-        new_doc_ids: Optional[List[str]] = None
-    ) -> Dict:
-        """
-        Suggest action based on topic change detection.
+        metrics = {
+            "primary_count": float(len(scoped_evidences or [])),
+            "expanded_count": float(len(expanded_evidences or [])),
+            "unbounded_count": float(len(unbounded_evidences or [])),
+        }
 
-        Returns:
-            Dict with action type and message for user
-        """
-        if not is_topic_changed:
-            return {
-                "action": "continue",
-                "message": None
-            }
+        metrics.update(self._score_metrics(scoped_evidences, prefix="primary"))
+        metrics.update(self._score_metrics(expanded_evidences, prefix="expanded"))
+        metrics.update(self._score_metrics(unbounded_evidences, prefix="unbounded"))
 
-        if reason == "no_relevant_content_in_previous":
-            message = (
-                "현재 질문은 이전 대화에서 사용한 문서와 관련이 없는 것으로 보입니다.\n\n"
-                "선택하세요:\n"
-                "1. 이전 문서 범위에서 가능한 답변 받기\n"
-                "2. 새로운 주제로 전환 (다른 문서 검색)"
+        analysis.metrics = metrics
+
+        if not previous_scope:
+            analysis.reason = "no_previous_scope"
+            return analysis
+
+        # Condition 1: no evidence in current scope
+        if not scoped_evidences:
+            logger.info("Topic change: no evidences in previous scope")
+            analysis.changed = True
+            analysis.reason = "no_primary_evidence"
+            analysis.overlap_ratio = 0.0
+            analysis.suggested_doc_ids = analysis.expanded_doc_ids or analysis.unbounded_doc_ids
+            return analysis
+
+        # Condition 2: low confidence within scope
+        if metrics["primary_avg_score"] < self.min_score_threshold:
+            logger.info(
+                "Topic change: primary average score %.3f below threshold %.3f",
+                metrics["primary_avg_score"],
+                self.min_score_threshold,
+            )
+            analysis.changed = True
+            analysis.reason = "low_primary_score"
+        elif metrics["primary_max_score"] < self.min_score_threshold * 1.5 and metrics["primary_count"] <= 2:
+            logger.info(
+                "Topic change: max primary score %.3f insufficient",
+                metrics["primary_max_score"],
+            )
+            analysis.changed = True
+            analysis.reason = "weak_primary_hits"
+
+        # Condition 3: wider scope contains significantly better docs
+        candidate_docs: List[str] = []
+        overlap_ratio = 1.0
+        if expanded_evidences:
+            overlap_ratio = self._overlap_ratio(previous_scope, analysis.expanded_doc_ids)
+            new_docs = [doc_id for doc_id in analysis.expanded_doc_ids if doc_id not in previous_scope]
+            metrics["expanded_new_doc_ratio"] = (
+                float(len(new_docs)) / float(len(analysis.expanded_doc_ids))
+                if analysis.expanded_doc_ids
+                else 0.0
+            )
+            metrics["expanded_avg_delta"] = (
+                metrics["expanded_avg_score"] - metrics["primary_avg_score"]
+            )
+            metrics["expanded_max_delta"] = (
+                metrics["expanded_max_score"] - metrics["primary_max_score"]
             )
 
-            if new_doc_ids:
-                message += f"\n\n💡 추천: 다음 문서에서 관련 정보를 찾았습니다: {', '.join(new_doc_ids[:3])}"
+            if new_docs:
+                candidate_docs.extend(new_docs)
+                better_avg = metrics["expanded_avg_delta"] >= self.retrieval_confidence_threshold
+                better_max = metrics["expanded_max_delta"] >= self.retrieval_confidence_threshold * 1.5
+                poor_overlap = overlap_ratio < 0.4
 
+                if better_avg or better_max or poor_overlap:
+                    logger.info(
+                        "Topic change: better matches in expanded scope (avg_delta=%.3f, max_delta=%.3f, overlap=%.2f)",
+                        metrics["expanded_avg_delta"],
+                        metrics["expanded_max_delta"],
+                        overlap_ratio,
+                    )
+                    analysis.changed = True
+                    analysis.reason = "better_results_elsewhere"
+
+        if not analysis.changed and not candidate_docs and unbounded_evidences:
+            new_docs_unbounded = [
+                doc_id for doc_id in analysis.unbounded_doc_ids if doc_id not in previous_scope
+            ]
+            if new_docs_unbounded:
+                candidate_docs.extend(new_docs_unbounded)
+                logger.info(
+                    "Topic change candidate: unbounded search exposes new docs %s",
+                    new_docs_unbounded,
+                )
+                analysis.changed = True
+                analysis.reason = "unbounded_has_new_docs"
+
+        analysis.overlap_ratio = overlap_ratio
+
+        if analysis.changed and not candidate_docs:
+            candidate_docs = analysis.expanded_doc_ids or analysis.unbounded_doc_ids
+
+        analysis.suggested_doc_ids = candidate_docs
+
+        if analysis.changed:
+            logger.info(
+                "Topic change detected (reason=%s, suggested=%s)",
+                analysis.reason,
+                candidate_docs,
+            )
+
+        return analysis
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _unique_doc_ids(self, evidences: Optional[Sequence[Dict[str, Any]]]) -> List[str]:
+        seen = set()
+        ordered: List[str] = []
+        if not evidences:
+            return ordered
+        for evidence in evidences:
+            doc_id = evidence.get("doc_id")
+            if not doc_id or doc_id in seen:
+                continue
+            seen.add(doc_id)
+            ordered.append(doc_id)
+        return ordered
+
+    def _score_metrics(self, evidences: Optional[Sequence[Dict[str, Any]]], prefix: str) -> Dict[str, float]:
+        if not evidences:
             return {
-                "action": "suggest_reset",
-                "message": message,
-                "suggested_docs": new_doc_ids
+                f"{prefix}_avg_score": 0.0,
+                f"{prefix}_max_score": 0.0,
             }
-
-        elif reason == "low_confidence_scores":
+        scores = [self._normalize_score(ev) for ev in evidences if self._normalize_score(ev) is not None]
+        if not scores:
             return {
-                "action": "low_confidence",
-                "message": "이전 문서에서 관련성이 낮은 결과만 발견되었습니다. 질문을 구체화하거나 다른 문서를 선택해 주세요.",
-                "suggested_docs": new_doc_ids
+                f"{prefix}_avg_score": 0.0,
+                f"{prefix}_max_score": 0.0,
             }
+        return {
+            f"{prefix}_avg_score": sum(scores) / len(scores),
+            f"{prefix}_max_score": max(scores),
+        }
 
-        elif reason == "better_results_elsewhere":
-            message = "다른 문서에서 더 적절한 정보를 찾을 수 있을 것 같습니다."
+    def _normalize_score(self, evidence: Dict[str, Any]) -> Optional[float]:
+        score = evidence.get("normalized_score")
+        if score is None:
+            score = evidence.get("score", evidence.get("similarity", evidence.get("relevance")))
+        if score is None:
+            return None
+        try:
+            score_f = float(score)
+        except (TypeError, ValueError):
+            return None
+        if score_f > 1.0:
+            score_f = score_f / 100.0
+        return max(0.0, min(score_f, 1.0))
 
-            if new_doc_ids:
-                message += f"\n추천 문서: {', '.join(new_doc_ids[:3])}"
+    def _overlap_ratio(self, previous_scope: set, expanded_doc_ids: Sequence[str]) -> float:
+        if not expanded_doc_ids:
+            return 1.0
+        expanded_set = set(expanded_doc_ids)
+        if not expanded_set:
+            return 1.0
+        return len(previous_scope.intersection(expanded_set)) / len(expanded_set)
 
-            return {
-                "action": "suggest_expand",
-                "message": message,
-                "suggested_docs": new_doc_ids
-            }
-
-        else:
-            return {
-                "action": "possible_change",
-                "message": "주제가 변경된 것으로 보입니다. 계속하시겠습니까?",
-                "suggested_docs": new_doc_ids
-            }
+    def _sanitize_doc_ids(self, doc_ids: Sequence[str]) -> List[str]:
+        if not doc_ids:
+            return []
+        sanitized = []
+        seen = set()
+        for doc_id in doc_ids:
+            if not doc_id or doc_id in seen:
+                continue
+            sanitized.append(doc_id)
+            seen.add(doc_id)
+        return sanitized
