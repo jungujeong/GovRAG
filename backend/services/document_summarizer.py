@@ -36,7 +36,9 @@ class DocumentSummarizer:
             self.normalizer = NormalizerGovKR()
 
             # Summary storage directory
-            self.summary_dir = Path(config.DOC_DIR).parent / "data" / "summaries"
+            # config.DOC_DIR is already BASE_DIR / "data" / "documents"
+            # So .parent gets us to "data", not "data/data"
+            self.summary_dir = Path(config.DOC_DIR).parent / "summaries"
             self.summary_dir.mkdir(parents=True, exist_ok=True)
 
         except Exception as e:
