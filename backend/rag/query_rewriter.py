@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 import re
 import logging
 
+from rag.idf_stats import get_global_filter
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,10 +99,39 @@ class QueryRewriter:
 
         # If we found context, create enhanced query
         if extracted_context:
-            # Key insight: Don't try to detect "is this a follow-up?"
-            # Instead, create BOTH queries: original + enhanced
-            # Let BM25/Vector search decide which is more relevant!
+            # IMPORTANT: Topic change detection using simple character overlap
+            # Extract Korean words from both query and context (raw, no filtering)
+            query_words = set(re.findall(r'[가-힣]{2,}', query))
+            context_words = set(re.findall(r'[가-힣]{2,}', extracted_context))
 
+            # Check if extracted_context already in query
+            context_already_in_query = extracted_context.lower() in query_lower
+
+            if context_already_in_query:
+                # Context already mentioned - just use original
+                logger.info(f"[QR] Entity '{extracted_context}' already in query, no change")
+                return RewriteResult(
+                    search_query=query,
+                    sub_queries=[],
+                    reasoning=f"entity_already_present:{extracted_context}",
+                    used_fallback=False,
+                )
+
+            # Check for topic change: query has substantial content (3+ char words) with NO overlap
+            substantial_query_words = {w for w in query_words if len(w) >= 3}
+            substantial_context_words = {w for w in context_words if len(w) >= 3}
+
+            if substantial_query_words and not (substantial_query_words & substantial_context_words):
+                # Zero overlap in meaningful words → topic change
+                logger.info(f"[QR] Topic change detected: query words {list(substantial_query_words)[:3]} have no overlap with context '{extracted_context}'")
+                return RewriteResult(
+                    search_query=query,
+                    sub_queries=[query],
+                    reasoning=f"topic_change_no_overlap",
+                    used_fallback=False,
+                )
+
+            # Safe to enhance - appears to be same topic
             enhanced_query = self._create_enhanced_query(query, extracted_context)
             logger.info(f"[QR] Enhanced query: {enhanced_query}")
 
@@ -132,49 +163,75 @@ class QueryRewriter:
 
     def _extract_key_nouns_from_messages(self, messages: List[Dict[str, str]]) -> List[str]:
         """
-        Extract key nouns from recent messages using morphological patterns.
-        NO HARDCODING - extracts all 4+ char nouns automatically.
-        Uses STATISTICAL clustering to normalize particles/variants.
+        Extract key nouns from recent messages - CONTEXT-AWARE.
 
-        IMPORTANT: Processes messages in CHRONOLOGICAL order (oldest to newest)
-        so that PREVIOUS context entities appear first, before current question words.
+        Strategy:
+        1. Process messages in CHRONOLOGICAL order
+        2. Extract from BOTH user questions AND assistant answers
+        3. Prioritize: assistant entities > user entities (assistant = confirmed context)
+        4. Use STATISTICAL clustering to normalize
+
+        This fixes the context loss problem where "홍티예술촌" was missed
+        in follow-up questions.
         """
-        content_entities = []  # 4+ chars (specific)
-        generic_entities = []  # 3 chars (generic)
+        # Separate context and current entities
+        context_entities = []  # From assistant (confirmed context)
+        user_entities = []     # From user questions
 
-        # Look at last few messages in CHRONOLOGICAL order (oldest to newest)
-        # This ensures previous topic entities appear BEFORE current question words
-        for msg in messages[-3:]:  # NOT reversed - chronological order
-            if msg.get("role") == "user":
-                text = msg.get("content", "").strip()
-                if text:
-                    nouns = self._extract_nouns_from_text(text)
-                    for noun in nouns:
-                        if len(noun) >= 4:
-                            content_entities.append(noun)
-                        else:
-                            generic_entities.append(noun)
+        content_context = []   # 3+ chars from assistant
+        content_user = []      # 3+ chars from user
+
+        # Look at recent messages in CHRONOLOGICAL order
+        for msg in messages[-5:]:  # Increased to 5 for better context
+            role = msg.get("role")
+            text = msg.get("content", "").strip()
+
+            if not text:
+                continue
+
+            # Extract nouns
+            nouns = self._extract_nouns_from_text(text)
+
+            # Separate by role
+            if role == "assistant":
+                # Assistant answers contain confirmed context entities
+                context_entities.extend(nouns)
+                for noun in nouns:
+                    if len(noun) >= 3:
+                        content_context.append(noun)
+            elif role == "user":
+                # User questions
+                user_entities.extend(nouns)
+                for noun in nouns:
+                    if len(noun) >= 3:
+                        content_user.append(noun)
 
         # STATISTICAL NORMALIZATION: Cluster variants using substring overlap
         # Example: "홍티예술촌", "홍티예술촌에", "홍티예술촌의" → "홍티예술촌"
-        normalized_content = self._normalize_entities_statistical(content_entities)
-        normalized_generic = self._normalize_entities_statistical(generic_entities)
+        normalized_context = self._normalize_entities_statistical(content_context)
+        normalized_user = self._normalize_entities_statistical(content_user)
 
         # Deduplicate while preserving order
+        # IMPORTANT: Context entities (from assistant) come FIRST
         seen = set()
         unique_entities = []
 
-        # Prioritize content entities first
-        for entity in normalized_content:
+        # 1. Context entities first (from assistant - confirmed context)
+        for entity in normalized_context:
             if entity not in seen:
                 seen.add(entity)
                 unique_entities.append(entity)
 
-        # Then add generic entities
-        for entity in normalized_generic:
+        # 2. User entities second (current question)
+        for entity in normalized_user:
             if entity not in seen:
                 seen.add(entity)
                 unique_entities.append(entity)
+
+        logger.info(
+            f"[QR] Extracted entities: context={normalized_context[:3]}, "
+            f"user={normalized_user[:3]}, final={unique_entities[:3]}"
+        )
 
         return unique_entities
 
@@ -223,34 +280,40 @@ class QueryRewriter:
 
     def _extract_nouns_from_text(self, text: str) -> List[str]:
         """
-        Extract likely nouns from text using minimal heuristics.
-        Pure extraction - normalization handled by statistical clustering.
+        Extract likely nouns from text using STATISTICAL methods - NO HARDCODING.
 
-        Strategy: Extract content words, let statistical clustering handle variants.
+        Strategy:
+        1. Extract all Korean words (2+ chars to catch more)
+        2. Use IDF-based statistical filter
+        3. Additional linguistic heuristics (minimal, universal)
         """
-        # Extract all Korean word segments
-        words = re.findall(r'[가-힣]{3,}', text)  # 3+ chars for entities
+        # Extract all Korean word segments (2+ chars to be inclusive)
+        words = re.findall(r'[가-힣]{2,}', text)
 
         nouns = []
+        stat_filter = get_global_filter()
+
         for word in words:
-            # Skip common function words (closed class, grammatical)
-            # These are UNIVERSAL grammatical words, not domain-specific
-            if word in ['그렇다면', '그러면', '그리고', '하지만', '그런데', '또한', '따라서']:
+            # 1. STATISTICAL FILTER - Primary method (NO HARDCODING)
+            # Uses IDF scores + character entropy
+            if not stat_filter.is_content_word(word, strict=False):
                 continue
 
-            # Skip question patterns (verb stems) - linguistic feature
+            # 2. Linguistic heuristics (MINIMAL, UNIVERSAL)
+            # These apply to ALL Korean, not domain-specific
+
+            # Skip question patterns (verb stems) - linguistic universals
             if any(pattern in word for pattern in ['알려', '설명', '어떻', '무엇', '어디', '언제', '누구']):
                 continue
 
-            # Skip verb/adjective endings (predicate forms) - linguistic feature
-            if any(word.endswith(ending) for ending in ['하다', '되다', '이다', '하는', '되는', '한다', '된다']):
+            # Skip verb/adjective endings - morphological universals
+            if any(word.endswith(ending) for ending in ['하다', '되다', '이다', '하는', '되는', '한다', '된다', '합니다']):
                 continue
 
-            # Accept content words: 3+ chars
-            # NO particle stripping here - handled by statistical clustering
-            if len(word) >= 3:
-                nouns.append(word)
+            # Accept as content word
+            nouns.append(word)
 
+        logger.debug(f"Extracted {len(nouns)} content words from: {text[:50]}...")
         return nouns
 
     def _create_enhanced_query(self, query: str, entity: str) -> str:
