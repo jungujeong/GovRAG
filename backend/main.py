@@ -19,18 +19,37 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting RAG Chatbot System...")
     config.validate()
-    
+
     # Initialize indexes if they don't exist
     from rag.whoosh_bm25 import WhooshBM25
     from rag.chroma_store import ChromaStore
-    
+
     WhooshBM25.initialize()
     ChromaStore.initialize()
-    
+
+    # Build IDF statistics for statistical function word filtering
+    logger.info("Building IDF statistics...")
+    try:
+        from rag.idf_stats import build_global_idf_stats
+        from whoosh.index import open_dir
+        from pathlib import Path
+
+        # Whoosh index is in subdirectory 'main'
+        index_path = Path(config.WHOOSH_DIR) / "main"
+        if index_path.exists():
+            ix = open_dir(str(index_path))
+            build_global_idf_stats(ix)
+            logger.info("IDF statistics built successfully")
+        else:
+            logger.warning(f"Whoosh index not found at {index_path}, skipping IDF stats build")
+    except Exception as e:
+        logger.warning(f"Failed to build IDF statistics: {e}")
+        logger.warning("System will continue with default IDF values")
+
     logger.info("System ready!")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down...")
 
