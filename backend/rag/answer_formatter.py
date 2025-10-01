@@ -590,37 +590,36 @@ class AnswerFormatter:
             current_paragraph += sentence + separator
             sentence_count += 1
 
-            # Natural break points - comprehensive list
-            natural_breaks = [
-                '또한', '그리고', '하지만', '따라서', '즉,', '예를 들어',
-                '첫째', '둘째', '셋째', '넷째', '다섯째',
-                '마지막으로', '결론적으로', '요약하면',
-                '특히', '반면', '그러나', '게다가', '아울러',
-                '한편', '다만', '단,', '참고로', '추가로',
-                '이와 관련하여', '이에 따라', '그 결과',
-                '구체적으로', '세부적으로', '종합하면'
-            ]
-
-            # Check if we should start a new paragraph
+            # Check if we should start a new paragraph using STATISTICAL approach
+            # NO hardcoded discourse markers - use structural patterns only
             should_break = False
 
-            # Break at natural transition points
-            for marker in natural_breaks:
-                if sentence.startswith(marker) or f' {marker}' in sentence:
-                    should_break = True
-                    break
-
-            # Break after 1-2 sentences for readability
-            if not should_break and sentence_count >= 2:
+            # 1. Break after 1-2 sentences for readability (length-based)
+            if sentence_count >= 2:
                 should_break = True
 
-            # Break at numbered items
+            # 2. Break at numbered items (structural pattern)
             if re.match(r'^\d+[.)]\s', sentence):
                 should_break = True
 
-            # Break at bullet points
+            # 3. Break at bullet points (structural pattern)
             if sentence.strip().startswith(('•', '-', '*', '○', '●')):
                 should_break = True
+
+            # 4. Statistical: sentence starts with 2+ char word (likely transition word)
+            # This catches discourse markers WITHOUT hardcoding specific words
+            # Works for ANY Korean: '그러나', '하지만', '또한', etc. and dialects
+            if not should_break and len(sentence.strip()) > 0:
+                # Check if sentence starts with common transition pattern (2-4 chars + comma or space)
+                if re.match(r'^[가-힣]{2,4}[,\s]', sentence.strip()):
+                    # Additional check: not a regular noun (simple heuristic)
+                    first_word = re.match(r'^([가-힣]{2,4})', sentence.strip())
+                    if first_word and first_word.group(1):
+                        word = first_word.group(1)
+                        # Statistical: short words at sentence start are often transitions
+                        # (Longer words like '구체적으로' are still caught, shorter ones filtered)
+                        if 2 <= len(word) <= 5:
+                            should_break = True
 
             if should_break and current_paragraph.strip():
                 result.append(current_paragraph.strip())

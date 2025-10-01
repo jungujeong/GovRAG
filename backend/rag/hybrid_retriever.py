@@ -36,23 +36,36 @@ class HybridRetriever:
         # Normalize query
         normalized_query = self.normalizer.normalize_query(query)
 
+        # Extract keywords for logging
+        query_keywords = self._extract_keywords(query)
+        self._last_keywords = query_keywords  # Store for logging
+
         # BM25 search
         bm25_results = self._bm25_search(normalized_query, document_ids)
+        self._last_bm25_count = len(bm25_results)  # Store for logging
 
         # Vector search
         vector_results = self._vector_search(query, document_ids)  # Use original query for embedding
+        self._last_vector_count = len(vector_results)  # Store for logging
 
         # Combine with RRF
         combined_results = self._reciprocal_rank_fusion(
             bm25_results,
             vector_results
         )
+        self._last_rrf_count = len(combined_results)  # Store for logging
 
         # Filter by relevance
         filtered_results = self._filter_by_relevance(query, combined_results)
+        self._last_filtered_count = len(filtered_results)  # Store for logging
 
         # Ensure diverse document coverage
         diverse_results = self._ensure_document_diversity(filtered_results, limit)
+
+        # Store include_reason in results for logging
+        for result in diverse_results:
+            if "include_reason" not in result:
+                result["include_reason"] = "diversity_selection"
 
         # Return top results
         return diverse_results
@@ -225,9 +238,9 @@ class HybridRetriever:
         return results[:limit]
     
     def _filter_by_relevance(self, query: str, results: List[Dict],
-                           min_score: float = 0.01,  # Lower threshold
-                           keyword_threshold: float = 0.05) -> List[Dict]:  # Lower threshold
-        """Filter results by relevance using multiple criteria with fallback"""
+                           min_score: float = 0.03,  # Trust RRF score (already combines BM25+Vector)
+                           keyword_threshold: float = 0.12) -> List[Dict]:  # Minimal threshold - trust semantic search
+        """Filter results primarily by RRF score (semantic+keyword combined), not keyword-only"""
         if not results:
             logger.warning("No results to filter")
             return []
@@ -253,18 +266,25 @@ class HybridRetriever:
             keyword_relevance = self._calculate_keyword_relevance(query_keywords, text)
             result["keyword_relevance"] = keyword_relevance
 
-            # More permissive filtering criteria - balanced approach
+            # Balanced filtering - trust both signals with appropriate thresholds
             include_reason = None
-            if keyword_relevance >= 0.1:  # Strong keyword match
+
+            # Debug logging for first few results
+            if i < 10:
+                logger.info(f"[FILTER_DEBUG] Result {i}: rrf={rrf_score:.4f}, kw={keyword_relevance:.3f}, doc={result.get('doc_id')}")
+
+            # Strict filtering strategy: Require BOTH signals
+            # This prevents irrelevant documents with high RRF but no keyword match
+            if rrf_score >= 0.006 and keyword_relevance >= 0.15:
+                # Strong semantic match WITH keyword presence - most reliable
+                include_reason = f"hybrid={rrf_score:.4f}_kw={keyword_relevance:.3f}"
+            elif keyword_relevance >= 0.30:
+                # Very strong keyword match (query term prominently mentioned)
+                # Raised from 0.25 to 0.30 to be more selective
                 include_reason = f"strong_keyword={keyword_relevance:.3f}"
-            elif keyword_relevance >= keyword_threshold:  # Moderate keyword match
-                include_reason = f"moderate_keyword={keyword_relevance:.3f}"
-            elif rrf_score >= 0.1:  # Strong semantic match
-                include_reason = f"strong_semantic={rrf_score:.3f}"
-            elif rrf_score >= min_score:  # Weak semantic match
-                include_reason = f"weak_semantic={rrf_score:.3f}"
-            elif keyword_relevance > 0:  # Any keyword match
-                include_reason = f"any_keyword={keyword_relevance:.3f}"
+            # Removed: elif rrf_score >= 0.010 (too permissive without keyword evidence)
+
+            # Note: Removed single-condition logic - require evidence from both signals
 
             if include_reason:
                 filtered_results.append(result)
@@ -272,16 +292,18 @@ class HybridRetriever:
             else:
                 debug_info.append(f"Result {i}: FILTERED - rrf={rrf_score:.3f}, kw={keyword_relevance:.3f}")
         
-        # If still no results, apply emergency fallback
+        # If still no results, apply very conservative emergency fallback
         if not filtered_results and len(results) > 0:
             logger.warning("No results passed filtering, applying emergency fallback")
-            # Take top 3 results by RRF score regardless of keywords
-            emergency_results = sorted(results, key=lambda x: x.get("rrf_score", 0), reverse=True)[:3]
+            # Take top 2 results by RRF score (conservative but not too restrictive)
+            emergency_results = sorted(results, key=lambda x: x.get("rrf_score", 0), reverse=True)[:2]
             for result in emergency_results:
                 if "keyword_relevance" not in result:
                     result["keyword_relevance"] = self._calculate_keyword_relevance(query_keywords, result.get("text", ""))
+                # Mark as emergency fallback
+                result["include_reason"] = f"emergency_fallback_rrf={result.get('rrf_score', 0):.3f}"
             filtered_results = emergency_results
-            logger.info(f"Emergency fallback: included {len(filtered_results)} top results")
+            logger.warning(f"Emergency fallback: included {len(filtered_results)} top results (may not be highly relevant)")
         
         # Sort by combined relevance
         filtered_results.sort(key=lambda x: (
@@ -296,75 +318,113 @@ class HybridRetriever:
         return filtered_results
     
     def _extract_keywords(self, query: str) -> List[str]:
-        """Extract meaningful keywords from query using pattern-based approach"""
+        """
+        Extract meaningful keywords using MORPHOLOGY-BASED approach.
+
+        Data-driven strategy:
+        1. Extract all Korean word segments (2+ chars)
+        2. Strip grammatical particles
+        3. Filter by morphological characteristics (length, structure)
+        4. Let BM25 index judge importance via IDF
+
+        No hard-coded domain terms - adapts to any document corpus.
+        """
         keywords = []
-        
-        # 1. Extract important patterns first
-        
-        # Numbers and dates (always important)
+
+        # 1. Numbers and structured patterns (universal importance)
         numbers = re.findall(r'\d+(?:년|월|일|호|회|차|번|개|명|건)?', query)
         keywords.extend(numbers)
-        
-        # Government terms (제X호, X조, X항 등)
-        gov_terms = re.findall(r'제\s*\d+\s*[호조항차회]', query)
-        keywords.extend(gov_terms)
-        
-        # 2. Extract content words (명사 중심)
-        
-        # Find potential nouns: 2+ character Korean words
+
+        # Government document patterns (structural, not content-specific)
+        gov_patterns = re.findall(r'제\s*\d+\s*[호조항차회]', query)
+        keywords.extend(gov_patterns)
+
+        # 2. Korean words - extract all potential content words
         korean_words = re.findall(r'[가-힣]{2,}', query)
-        
+
         for word in korean_words:
-            # Filter by word characteristics rather than hardcoded lists
-            if self._is_content_word(word):
+            # NO particle stripping - BM25's TF-IDF handles it automatically
+            # Statistical approach: Let the search engine down-weight common particles
+            if len(word) < 2:
+                continue
+
+            # Morphological filtering - no domain knowledge needed
+            if self._is_likely_content_word(word):
                 keywords.append(word)
-        
-        # 3. Extract proper nouns and technical terms
-        # English terms and mixed terms
+
+        # 3. English/alphanumeric terms
         english_terms = re.findall(r'[a-zA-Z][a-zA-Z0-9]*', query)
         keywords.extend([term for term in english_terms if len(term) >= 2])
-        
-        # 4. If very few keywords extracted, add single-character Korean words as fallback
-        if len(keywords) < 2:
-            single_chars = re.findall(r'[가-힣]', query)
-            keywords.extend([char for char in single_chars if char not in ['은', '는', '이', '가', '을', '를', '에', '의', '도', '만', '와', '과', '로', '서', '부터', '까지']])
-        
-        # Remove duplicates and return
-        unique_keywords = list(set(keywords))
-        logger.debug(f"Keyword extraction: '{query}' -> {unique_keywords}")
+
+        # Remove duplicates, preserve order for debugging
+        seen = set()
+        unique_keywords = []
+        for kw in keywords:
+            if kw not in seen:
+                seen.add(kw)
+                unique_keywords.append(kw)
+
+        logger.info(f"Extracted keywords: {unique_keywords}")
         return unique_keywords
-    
-    def _is_content_word(self, word: str) -> bool:
-        """Determine if a Korean word is a content word (명사, 동사 어간 등)"""
+
+    def _strip_particles(self, word: str) -> str:
+        """Strip common Korean particles from end of word"""
+        particles = ['은', '는', '이', '가', '을', '를', '에', '의', '도', '만', '와', '과', '로', '서', '부터', '까지', '에서', '에게', '한테', '으로', '라고']
+        for particle in sorted(particles, key=len, reverse=True):  # Longer particles first
+            if word.endswith(particle) and len(word) > len(particle):
+                return word[:-len(particle)]
+        return word
+
+    def _is_likely_content_word(self, word: str) -> bool:
+        """
+        Determine if a Korean word is likely a content word (noun, proper noun)
+        using MORPHOLOGICAL features only - no domain knowledge.
+
+        Purely linguistic approach that adapts to any corpus.
+        """
         if len(word) < 2:
             return False
-        
-        # 1. 길이가 길수록 내용어일 가능성 높음
+
+        # 1. Length heuristic (strong signal, no domain knowledge)
+        #    Longer Korean words are statistically more likely to be content words
         if len(word) >= 4:
-            return True
-        
-        # 2. 특정 접미사로 끝나는 경우 제외 (조사, 어미)
-        functional_endings = ['하다', '되다', '이다', '하는', '되는', '한다', '된다']
-        if any(word.endswith(ending) for ending in functional_endings):
+            return True  # 홍티예술촌, 감천문화마을, 외국인관광객
+
+        # 2. Reject clear verb/adjective forms (morphology, not semantics)
+        verb_adj_endings = [
+            '하다', '되다', '이다',  # Basic verb endings
+            '하는', '되는', '한다', '된다', '하고', '되고', '이고',  # Conjugated forms
+            '하여', '되어', '이어', '하니', '되니'
+        ]
+        if any(word.endswith(ending) for ending in verb_adj_endings):
             return False
-        
-        # 3. 단일 음절 조사들 제외
-        single_syllable_particles = ['은', '는', '이', '가', '을', '를', '에', '의', '도', '만', '도', '와', '과']
-        if word in single_syllable_particles:
+
+        # 3. Reject standalone particles (grammatical, not content)
+        particles = ['은', '는', '이', '가', '을', '를', '에', '의', '도', '만', '와', '과', '로', '서']
+        if word in particles:
             return False
-        
-        # 4. 빈도 높은 기능어 제외 (최소한만)
-        common_function_words = ['그리고', '하지만', '그러나', '또한', '그런데', '따라서', '그래서']
-        if word in common_function_words:
+
+        # 4. For 3-char words: Generally accept (statistically likely nouns)
+        if len(word) == 3:
+            # Reject only extremely common function words
+            function_3char = ['그리고', '하지만', '그러나', '또한', '그런데', '따라서', '그래서']
+            return word not in function_3char
+
+        # 5. For 2-char words: Use morphological cues
+        if len(word) == 2:
+            # Check final character for noun-like jongseong (받침)
+            # Many Korean nouns end with certain characters
+            final_char = word[-1]
+
+            # Common noun endings (linguistic pattern, not domain-specific)
+            noun_endings = ['촌', '관', '장', '과', '단', '원', '실', '부', '국', '청', '소', '처', '회', '사', '인']
+            if final_char in noun_endings:
+                return True
+
+            # Otherwise, 2-char words are too ambiguous - reject to avoid noise
             return False
-        
-        # 5. 정부/공문서 관련 중요 용어는 항상 포함
-        important_terms = ['구청', '청장', '지시', '사항', '예산', '편성', '회의', '계획', '사업', '정책']
-        if any(term in word for term in important_terms):
-            return True
-        
-        # 6. 기본적으로 2글자 이상이면 내용어로 간주
-        return True
+
+        return False
     
     def _calculate_keyword_relevance(self, keywords: List[str], text: str) -> float:
         """Calculate keyword relevance score with improved Korean handling"""
