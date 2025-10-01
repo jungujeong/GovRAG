@@ -31,8 +31,11 @@ from config import config
 from utils.error_handler import ErrorHandler
 from utils.rate_limiter import RateLimiter
 from services.title_generator import TitleGenerator
+from utils.query_logger import get_query_logger, QueryLog, SearchResult
+import time
 
 logger = logging.getLogger(__name__)
+query_logger = get_query_logger()
 
 router = APIRouter()
 
@@ -493,12 +496,22 @@ async def send_message(
             raise HTTPException(status_code=400, detail="메시지가 너무 깁니다. 짧게 나누어 보내주세요")
         
         # Check if documents are uploaded
-        if not session.document_ids and not getattr(request, "skip_document_check", False):
-            raise HTTPException(
-                status_code=400,
-                detail="먼저 문서를 업로드해 주세요",
-                headers={"X-Error-Type": "NO_DOCUMENTS"}
-            )
+        # Note: Allow empty list [] or None for full index search
+        # Only block if document_ids is explicitly an empty list AND index is empty
+        if session.document_ids is not None and len(session.document_ids) == 0:
+            # Check if there are any documents in the index
+            try:
+                from rag.whoosh_bm25 import WhooshBM25
+                whoosh_bm25 = WhooshBM25()
+                if whoosh_bm25.get_doc_count() == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="먼저 문서를 업로드해 주세요",
+                        headers={"X-Error-Type": "NO_DOCUMENTS"}
+                    )
+            except Exception as e:
+                logger.warning(f"Could not check document count: {e}")
+                # Allow query to proceed even if check fails
         
         # Add user message
         await session_manager.add_message(session_id, "user", request.query)
@@ -647,15 +660,20 @@ async def send_message(
 
             evidences = resolution.evidences
             doc_scope_metadata = dict(resolution.metadata or {})
-            allowed_docs_enforce = resolution.allowed_doc_ids
             topic_change_detected = resolution.topic_change_detected
             topic_change_reason = resolution.topic_change_reason
             topic_change_suggested = resolution.topic_change_suggested or []
             should_use_previous_sources = resolution.allow_fixed_citations
             doc_scope_ids = resolution.doc_scope_ids
             doc_scope_mode = resolution.doc_scope_mode
-            doc_scope_mode = resolution.doc_scope_mode
-            doc_scope_mode = resolution.doc_scope_mode
+
+            # 'expanded' 모드(topic change)에서는 문서 필터링을 비활성화
+            if doc_scope_mode == "expanded":
+                allowed_docs_enforce = None  # Allow all documents from evidences
+                logger.info(f"Topic change detected - allowing all evidence documents")
+            else:
+                allowed_docs_enforce = resolution.allowed_doc_ids
+                logger.info(f"Using resolved doc scope: {allowed_docs_enforce}")
 
             logger.info(
                 "Resolved evidence scope: mode=%s, docs=%s, evidences=%d",
@@ -722,7 +740,8 @@ async def send_message(
                 evidences = evidences[:config.TOPK_RERANK]
 
             # 2.5 리랭킹 후 후속 질문인 경우 문서 범위 필터링
-            if should_use_previous_sources and previous_doc_ids:
+            # IMPORTANT: 'expanded' 모드는 topic change를 의미하므로 필터링하지 않음
+            if should_use_previous_sources and previous_doc_ids and doc_scope_mode != "expanded":
                 filtered_evidences = []
                 for e in evidences:
                     if e.get("doc_id") in previous_doc_ids:
@@ -731,13 +750,16 @@ async def send_message(
                         logger.warning(f"Post-rerank filtering out evidence from unexpected doc: {e.get('doc_id')}")
                 evidences = filtered_evidences
                 logger.info(f"Post-rerank filter: {len(evidences)} evidences from {previous_doc_ids}")
+            elif doc_scope_mode == "expanded":
+                logger.info(f"Skipping post-rerank filter due to expanded mode (topic change detected)")
 
             # 클라이언트 연결이 끊겼다면 즉시 중단
             if cancel_event.is_set():
                 raise HTTPException(status_code=499, detail="Client closed request")
 
             # 2.6 생성 전 최종 필터링 - 후속 질문인 경우
-            if should_use_previous_sources and previous_doc_ids:
+            # IMPORTANT: 'expanded' 모드는 topic change를 의미하므로 필터링하지 않음
+            if should_use_previous_sources and previous_doc_ids and doc_scope_mode != "expanded":
                 # evidences를 다시 한번 확인
                 final_evidences = []
                 for e in evidences:
@@ -748,6 +770,8 @@ async def send_message(
                         logger.error(f"Evidence from unexpected document {doc_id} detected and removed")
                 evidences = final_evidences
                 logger.info(f"Final pre-generation filter: {len(evidences)} evidences from allowed documents")
+            elif doc_scope_mode == "expanded":
+                logger.info(f"Skipping pre-generation filter due to expanded mode (topic change detected)")
 
             # 3. Generate with context (취소 가능 태스크로 실행)
             gen_task = asyncio.create_task(
@@ -1160,12 +1184,21 @@ async def send_message_stream(
                 yield json.dumps({"error": "메시지를 입력해 주세요"}) + "\n"
                 return
 
-            if not session.document_ids and not getattr(request, "skip_document_check", False):
-                yield json.dumps({
-                    "error": "NO_DOCUMENTS",
-                    "message": "먼저 문서를 업로드해 주세요"
-                }) + "\n"
-                return
+            # Check if documents are uploaded
+            # Note: Allow empty list [] or None for full index search
+            if session.document_ids is not None and len(session.document_ids) == 0:
+                try:
+                    from rag.whoosh_bm25 import WhooshBM25
+                    whoosh_bm25 = WhooshBM25()
+                    if whoosh_bm25.get_doc_count() == 0:
+                        yield json.dumps({
+                            "error": "NO_DOCUMENTS",
+                            "message": "먼저 문서를 업로드해 주세요"
+                        }) + "\n"
+                        return
+                except Exception as e:
+                    logger.warning(f"Could not check document count: {e}")
+                    # Allow query to proceed even if check fails
 
             # Add user message
             await session_manager.add_message(session_id, "user", request.query)
@@ -1568,6 +1601,44 @@ async def send_message_stream(
             #     await session_manager.add_memory_facts(session_id, memory_facts)
             logger.debug("Streaming: Memory facts collection disabled for source consistency")
 
+            # Log query details (스트리밍 엔드포인트)
+            try:
+                retriever_instance = get_retriever()
+                query_log_entry = QueryLog(
+                    timestamp=datetime.now().isoformat(),
+                    session_id=session_id,
+                    query=request.query,
+                    extracted_keywords=getattr(retriever_instance, '_last_keywords', []),
+                    bm25_count=getattr(retriever_instance, '_last_bm25_count', 0),
+                    vector_count=getattr(retriever_instance, '_last_vector_count', 0),
+                    rrf_count=getattr(retriever_instance, '_last_rrf_count', 0),
+                    filtered_count=getattr(retriever_instance, '_last_filtered_count', 0),
+                    final_count=len(evidences),
+                    search_results=[
+                        SearchResult(
+                            chunk_id=ev.get("chunk_id", ""),
+                            doc_id=ev.get("doc_id", ""),
+                            page=ev.get("page", 0),
+                            text_preview=ev.get("text", "")[:200],
+                            rrf_score=ev.get("rrf_score", 0.0),
+                            keyword_relevance=ev.get("keyword_relevance", 0.0),
+                            bm25_score=ev.get("bm25_score", 0.0),
+                            vector_score=ev.get("score", 0.0),
+                            include_reason=ev.get("include_reason", "unknown")
+                        )
+                        for ev in evidences
+                    ],
+                    model_name=config.OLLAMA_MODEL,
+                    model_response=full_response,
+                    response_sources=sources,
+                    search_time_ms=0.0,  # Not tracked in streaming
+                    generation_time_ms=0.0,  # Not tracked in streaming
+                    total_time_ms=0.0  # Not tracked in streaming
+                )
+                query_logger.log_query(query_log_entry)
+            except Exception as log_error:
+                logger.error(f"Failed to log streaming query: {log_error}")
+
             # Send final data with sources
             yield json.dumps({
                 "complete": True,
@@ -1661,17 +1732,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 # Process with lock to prevent concurrent processing
                 async with manager.session_locks.get(session_id, asyncio.Lock()):
                     try:
+                        # Timing start
+                        start_time = time.time()
+
                         # Add user message
                         await session_manager.add_message(session_id, "user", query)
-                        
+
                         # Send status
                         await manager.send_message(session_id, {
                             "type": "status",
                             "message": "문서 검색 중..."
                         })
-                        
-                        # Get evidences
+
+                        # Get evidences with timing
+                        search_start = time.time()
                         evidences = retriever.retrieve(query, document_ids=session.document_ids)
+                        search_time_ms = (time.time() - search_start) * 1000
                         
                         if not evidences:
                             await manager.send_message(session_id, {
@@ -1689,8 +1765,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         
                         # Get context
                         context = await session_manager.get_session_context(session_id)
-                        
-                        # Stream response
+
+                        # Stream response with timing
+                        generation_start = time.time()
                         full_response = ""
                         async for chunk in generator.stream_with_context(
                             query,
@@ -1704,6 +1781,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                     "content": chunk,
                                     "complete": False
                                 })
+                        generation_time_ms = (time.time() - generation_start) * 1000
                         
                         # Process citations
                         response_data = citation_tracker.track_citations(
@@ -1718,6 +1796,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             full_response,
                             sources=response_data.get("sources", [])
                         )
+
+                        # Calculate total time
+                        total_time_ms = (time.time() - start_time) * 1000
+
+                        # Log query details
+                        try:
+                            query_log_entry = QueryLog(
+                                timestamp=datetime.now().isoformat(),
+                                session_id=session_id,
+                                query=query,
+                                extracted_keywords=getattr(retriever, '_last_keywords', []),
+                                bm25_count=getattr(retriever, '_last_bm25_count', 0),
+                                vector_count=getattr(retriever, '_last_vector_count', 0),
+                                rrf_count=getattr(retriever, '_last_rrf_count', 0),
+                                filtered_count=getattr(retriever, '_last_filtered_count', 0),
+                                final_count=len(evidences),
+                                search_results=[
+                                    SearchResult(
+                                        chunk_id=ev.get("chunk_id", ""),
+                                        doc_id=ev.get("doc_id", ""),
+                                        page=ev.get("page", 0),
+                                        text_preview=ev.get("text", "")[:200],
+                                        rrf_score=ev.get("rrf_score", 0.0),
+                                        keyword_relevance=ev.get("keyword_relevance", 0.0),
+                                        bm25_score=ev.get("bm25_score", 0.0),
+                                        vector_score=ev.get("score", 0.0),
+                                        include_reason=ev.get("include_reason", "unknown")
+                                    )
+                                    for ev in evidences
+                                ],
+                                model_name=config.OLLAMA_MODEL,
+                                model_response=full_response,
+                                response_sources=response_data.get("sources", []),
+                                search_time_ms=search_time_ms,
+                                generation_time_ms=generation_time_ms,
+                                total_time_ms=total_time_ms
+                            )
+                            query_logger.log_query(query_log_entry)
+                        except Exception as log_error:
+                            logger.error(f"Failed to log query: {log_error}")
 
                         # Send completion with sources
                         await manager.send_message(session_id, {
