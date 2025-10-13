@@ -18,6 +18,12 @@ if __name__ == "__main__":
     from backend.rag.whoosh_bm25 import WhooshBM25
     from backend.rag.chroma_store import ChromaStore
     from backend.rag.embedder import Embedder
+    # Safe import for summarizer (new feature)
+    try:
+        from backend.services.document_summarizer import DocumentSummarizer
+        SUMMARIZER_AVAILABLE = True
+    except ImportError:
+        SUMMARIZER_AVAILABLE = False
 else:
     # Imported as module
     from config import config
@@ -28,6 +34,12 @@ else:
     from rag.whoosh_bm25 import WhooshBM25
     from rag.chroma_store import ChromaStore
     from rag.embedder import Embedder
+    # Safe import for summarizer (new feature)
+    try:
+        from services.document_summarizer import DocumentSummarizer
+        SUMMARIZER_AVAILABLE = True
+    except ImportError:
+        SUMMARIZER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +68,17 @@ class DocumentIndexer:
         self._whoosh = None
         self._chroma = None
         self._embedder = None
+
+        # Initialize summarizer (new feature - safe initialization)
+        if SUMMARIZER_AVAILABLE:
+            try:
+                self._summarizer = DocumentSummarizer()
+                logger.info("Document summarizer initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize document summarizer: {e}")
+                self._summarizer = None
+        else:
+            self._summarizer = None
         
     @property
     def whoosh(self):
@@ -257,12 +280,38 @@ class DocumentIndexer:
                 logger.error(f"Failed to add to ChromaDB: {e}")
                 return {"status": "chroma_error", "file": str(file_path), "error": str(e)}
             
+            # Generate summary after successful indexing (new feature - non-blocking)
+            summary_status = "not_attempted"
+            if self._summarizer:
+                try:
+                    logger.info(f"Generating summary for {file_path.name}...")
+                    doc_id = doc.get("doc_id", Path(file_path).stem)
+
+                    # Create a background task for summary generation (to not block indexing)
+                    async def generate_summary():
+                        try:
+                            summary_result = await self._summarizer.generate_summary(file_path, doc_id)
+                            logger.info(f"Summary generated for {file_path.name}: {summary_result.get('status', 'unknown')}")
+                        except Exception as e:
+                            logger.warning(f"Summary generation failed for {file_path.name}: {e}")
+
+                    # Create task but don't wait for it (non-blocking)
+                    asyncio.create_task(generate_summary())
+                    summary_status = "initiated"
+
+                except Exception as e:
+                    logger.warning(f"Failed to initiate summary generation for {file_path.name}: {e}")
+                    summary_status = "failed"
+            else:
+                summary_status = "summarizer_unavailable"
+
             return {
                 "status": "success",
                 "file": str(file_path),
                 "chunks": len(chunks),
                 "pages": len(doc.get('pages', [])),
-                "tables": len(doc.get('tables', []))
+                "tables": len(doc.get('tables', [])),
+                "summary_status": summary_status  # New field for summary status
             }
             
         except Exception as e:
