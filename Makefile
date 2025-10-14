@@ -1,4 +1,4 @@
-.PHONY: install bundle index qa run stop clean setup validate index-backup index-restore index-verify index-repair index-list index-clean
+.PHONY: install bundle index qa run run-dev stop clean setup validate index-backup index-restore index-verify index-repair index-list index-clean
 
 install:
 	@echo "Installing dependencies..."
@@ -43,6 +43,21 @@ run:
 			exit 1; \
 		fi; \
 	fi
+	@echo "Starting backend..."
+	@(cd backend && PYTHONPATH=. uvicorn main:app --port 8000) & \
+	BACKEND_PID=$$!; \
+	sleep 2; \
+	echo "Starting frontend..."; \
+	(cd frontend && npm run dev) & \
+	FRONTEND_PID=$$!; \
+	trap 'kill $$BACKEND_PID $$FRONTEND_PID 2>/dev/null' SIGINT SIGTERM; \
+	echo "✓ Both servers started. Press Ctrl+C to stop."; \
+	echo "  Frontend: http://localhost:5173"; \
+	echo "  Backend:  http://localhost:8000"; \
+	wait
+
+run-dev:
+	@echo "Starting RAG system in dev mode (auto-reload)..."
 	@trap 'kill %1 %2' SIGINT; \
 	(cd backend && PYTHONPATH=. uvicorn main:app --reload --port 8000) & \
 	(cd frontend && npm run dev) & \

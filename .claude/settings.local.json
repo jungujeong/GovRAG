@@ -52,7 +52,20 @@
       "Bash(nvm use:*)",
       "Bash(awk:*)",
       "Bash(PYTHONPATH=. uvicorn main:app --host 0.0.0.0 --port 8000 --reload)",
-      "Bash(ollama list:*)"
+      "Bash(ollama list:*)",
+      "Bash(git cherry-pick:*)",
+      "Bash(PYTHONPATH=. pytest tests/test_query_rewriter.py -v)",
+      "Bash(PYTHONPATH=. pytest tests/test_statistical_filter.py -v)",
+      "Bash(PYTHONPATH=. pytest tests/test_response_postprocessor_statistical.py -v)",
+      "Bash(python3:*)",
+      "Bash(rm:*)",
+      "Bash(PYTHONPATH=. uvicorn:*)",
+      "Bash(PYTHONPATH=. timeout 10 python3 -c \"from main import app; print(''✓ main.py imports successfully'')\")",
+      "Bash(pyenv local:*)",
+      "mcp__playwright__playwright_navigate",
+      "Bash(ps:*)",
+      "Bash(./stop.sh:*)",
+      "Bash(./start.sh:*)"
     ],
     "deny": [],
     "ask": []

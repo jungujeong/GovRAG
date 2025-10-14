@@ -179,3 +179,54 @@ class ResponsePostProcessor:
             return ''
 
         return self._token_pattern.sub(repl, text)
+
+    def _normalize_entity(self, entity: str) -> str:
+        """
+        Normalize entity using STATISTICAL suffix trimming - NO HARDCODING.
+
+        Strategy: Iteratively trim 1-2 characters from end and check if
+        shorter form is more "canonical" (has higher character diversity).
+
+        This works for ANY Korean dialect without hardcoded particle lists.
+        """
+        if not entity:
+            return ""
+
+        # Start with the entity as-is
+        normalized = entity.strip()
+
+        # Statistical suffix trimming: Try removing 1-2 chars at a time
+        # Keep the shortest form that maintains high character diversity
+        best_form = normalized
+        best_diversity = self._calculate_diversity(normalized)
+
+        # Try trimming 1-2 characters iteratively
+        for trim_length in [1, 2]:
+            if len(normalized) > trim_length + 1:  # Keep at least 2 chars
+                candidate = normalized[:-trim_length]
+
+                # Calculate character diversity of candidate
+                candidate_diversity = self._calculate_diversity(candidate)
+
+                # If candidate has higher or equal diversity, it's likely the root form
+                # (particles typically reduce diversity by adding common chars)
+                if candidate_diversity >= best_diversity:
+                    best_form = candidate
+                    best_diversity = candidate_diversity
+
+        return best_form.lower().strip()
+
+    def _calculate_diversity(self, text: str) -> float:
+        """
+        Calculate character diversity (unique chars / total chars).
+        Higher diversity = more information content = more likely root form.
+        """
+        if not text:
+            return 0.0
+        return len(set(text)) / len(text)
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text by converting to lowercase and stripping whitespace"""
+        if not text:
+            return ""
+        return text.lower().strip()

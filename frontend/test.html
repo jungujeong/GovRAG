@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple Test</title>
+</head>
+<body>
+  <h1>Test Page</h1>
+  <p>If you see this, Vite is working!</p>
+  <script>
+    console.log('Test page loaded successfully')
+    fetch('http://localhost:8000/api/health')
+      .then(r => r.json())
+      .then(d => console.log('Backend health:', d))
+      .catch(e => console.error('Backend error:', e))
+  </script>
+</body>
+</html>

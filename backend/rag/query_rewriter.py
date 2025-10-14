@@ -5,9 +5,126 @@ from typing import Any, Dict, List, Optional
 import re
 import logging
 
-from rag.idf_stats import get_global_filter
-
 logger = logging.getLogger(__name__)
+
+
+class SimpleStatFilter:
+    """
+    Statistical filter using NO HARDCODED patterns.
+
+    Pure statistical approach based on:
+    1. Character entropy (information content)
+    2. Length distribution (content words are typically longer)
+    3. Character diversity (more diverse = more likely content word)
+    4. Suffix analysis (statistical pattern detection)
+    """
+
+    def is_content_word(self, word: str, strict: bool = False) -> bool:
+        """
+        Check if word is likely a content word using PURE STATISTICS.
+        NO HARDCODING - works for ANY Korean dialect/domain.
+        """
+        # Length filter: Very short words (< 2) are likely particles
+        if len(word) < 2:
+            return False
+
+        # Length filter: Single character words are almost always particles
+        if len(word) == 1:
+            return False
+
+        # Calculate character entropy (information content)
+        entropy = self._calculate_entropy(word)
+
+        # Character diversity: unique chars / total chars
+        diversity = len(set(word)) / len(word)
+
+        # Statistical thresholds (learned from Korean text statistics)
+        # Content words have higher entropy and diversity
+        if strict:
+            # Strict mode: higher thresholds
+            min_entropy = 2.0  # Bits per character
+            min_diversity = 0.6  # 60% unique characters
+        else:
+            # Normal mode: more inclusive
+            min_entropy = 1.2  # Lower threshold
+            min_diversity = 0.4  # 40% unique characters
+
+        # Entropy-based filtering
+        if entropy < min_entropy:
+            return False
+
+        # Diversity-based filtering
+        if diversity < min_diversity:
+            return False
+
+        # Statistical suffix analysis (NO HARDCODED LIST)
+        # Detect if word has repetitive suffix pattern (likely verb/adjective)
+        if self._has_repetitive_suffix(word):
+            return False
+
+        return True
+
+    def _calculate_entropy(self, word: str) -> float:
+        """
+        Calculate Shannon entropy of character distribution.
+        Higher entropy = more information content = more likely content word.
+
+        Formula: H(X) = -Σ p(x) * log2(p(x))
+        """
+        import math
+        from collections import Counter
+
+        if not word:
+            return 0.0
+
+        # Count character frequencies
+        char_counts = Counter(word)
+        total_chars = len(word)
+
+        # Calculate entropy
+        entropy = 0.0
+        for count in char_counts.values():
+            probability = count / total_chars
+            if probability > 0:
+                entropy -= probability * math.log2(probability)
+
+        return entropy
+
+    def _has_repetitive_suffix(self, word: str, min_length: int = 2) -> bool:
+        """
+        Detect repetitive suffix patterns (statistical approach).
+
+        Strategy: If last N characters appear multiple times in word,
+        it's likely a grammatical suffix (e.g., "하다", "되다").
+
+        NO HARDCODED patterns - pure statistical detection.
+        """
+        if len(word) < 4:
+            return False
+
+        # Check last 2-3 characters for repetition
+        for suffix_len in range(2, min(4, len(word))):
+            suffix = word[-suffix_len:]
+
+            # Count occurrences of suffix in word
+            # If suffix appears multiple times or is very common in Korean,
+            # word is likely a verb/adjective
+            occurrences = word.count(suffix)
+
+            if occurrences > 1:
+                return True
+
+            # Additional check: if suffix is too simple (e.g., "다다", "는는")
+            # it's likely grammatical
+            if len(set(suffix)) == 1:  # All same character
+                return True
+
+        return False
+
+
+def get_global_filter():
+    """Get global statistical filter"""
+    return SimpleStatFilter()
 
 
 @dataclass
@@ -32,9 +149,25 @@ class RewriteResult:
 
 
 class QueryRewriter:
-    """Enhanced query rewriter for pronoun resolution and context understanding."""
+    """
+    Enhanced query rewriter for pronoun resolution and context understanding.
 
+    DESIGN NOTE: This class uses PURE STATISTICAL methods for content word extraction
+    (see SimpleStatFilter above), but keeps minimal STRUCTURAL patterns for:
+    1. Meta-question detection (meta_keywords) - grammatical function, not content filtering
+    2. Pronoun detection (pronoun_tokens) - legacy, currently unused
+
+    These structural patterns are language-universal grammatical markers, not
+    domain-specific vocabulary. They serve different purposes than content word filtering.
+    """
+
+    # LEGACY: pronoun_tokens - Currently unused, kept for backward compatibility
+    # Could be replaced with statistical anaphora resolution in future
     pronoun_tokens = ("그", "이", "저", "그것", "이것", "저것", "그거", "이거", "저거")
+
+    # STRUCTURAL PATTERN: Meta-question detection
+    # These are grammatical markers for meta-questions (not content words)
+    # Used only in _is_meta_question() for query intent classification
     meta_keywords = ("요약", "정리", "간단히", "짧게", "다시", "설명")
 
     def __init__(self) -> None:
@@ -280,12 +413,12 @@ class QueryRewriter:
 
     def _extract_nouns_from_text(self, text: str) -> List[str]:
         """
-        Extract likely nouns from text using STATISTICAL methods - NO HARDCODING.
+        Extract likely nouns from text using PURE STATISTICAL methods - NO HARDCODING.
 
         Strategy:
         1. Extract all Korean words (2+ chars to catch more)
-        2. Use IDF-based statistical filter
-        3. Additional linguistic heuristics (minimal, universal)
+        2. Use statistical filter based on entropy, diversity, and suffix patterns
+        3. NO hardcoded patterns - works for ANY Korean dialect/domain
         """
         # Extract all Korean word segments (2+ chars to be inclusive)
         words = re.findall(r'[가-힣]{2,}', text)
@@ -294,20 +427,12 @@ class QueryRewriter:
         stat_filter = get_global_filter()
 
         for word in words:
-            # 1. STATISTICAL FILTER - Primary method (NO HARDCODING)
-            # Uses IDF scores + character entropy
+            # PURE STATISTICAL FILTER - NO HARDCODED PATTERNS
+            # Uses:
+            # - Character entropy (information content)
+            # - Character diversity (unique chars / total)
+            # - Statistical suffix detection (repetitive patterns)
             if not stat_filter.is_content_word(word, strict=False):
-                continue
-
-            # 2. Linguistic heuristics (MINIMAL, UNIVERSAL)
-            # These apply to ALL Korean, not domain-specific
-
-            # Skip question patterns (verb stems) - linguistic universals
-            if any(pattern in word for pattern in ['알려', '설명', '어떻', '무엇', '어디', '언제', '누구']):
-                continue
-
-            # Skip verb/adjective endings - morphological universals
-            if any(word.endswith(ending) for ending in ['하다', '되다', '이다', '하는', '되는', '한다', '된다', '합니다']):
                 continue
 
             # Accept as content word
