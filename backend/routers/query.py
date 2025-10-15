@@ -2,6 +2,9 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, List, Optional
 import asyncio
 import logging
+import time
+from datetime import datetime
+import uuid
 
 from schemas import QueryRequest, QueryResponse
 from rag.hybrid_retriever import HybridRetriever
@@ -11,6 +14,15 @@ from rag.evidence_enforcer import EvidenceEnforcer
 from rag.citation_tracker import CitationTracker
 from rag.answer_formatter import AnswerFormatter
 from config import config
+from utils.query_logger import (
+    get_query_logger,
+    QueryLog,
+    SearchResult,
+    QualityMetrics,
+    PerformanceMetrics,
+    RetrievalMetrics,
+    ErrorInfo
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,41 +101,98 @@ async def test_retrieval(q: str = "테스트"):
 
 @router.post("/", response_model=QueryResponse)
 async def process_query(request: QueryRequest) -> QueryResponse:
-    """Process a RAG query"""
+    """Process a RAG query with comprehensive logging"""
+    start_time = time.time()
+    session_id = str(uuid.uuid4())
+    query_logger = get_query_logger()
+
+    # Initialize timing markers
+    search_start = 0
+    search_end = 0
+    rerank_start = 0
+    rerank_end = 0
+    generation_start = 0
+    generation_end = 0
+
+    # Initialize log data
+    query_type = "normal"
+    evidences = []
+    response = {}
+    error_info = ErrorInfo()
+
     try:
-        logger.info(f"Processing query: {request.query[:100]}...")
+        logger.info(f"Processing query [{session_id}]: {request.query[:100]}...")
 
         # Check for greeting or general queries
         greetings = ["안녕", "hello", "hi", "도움", "help", "뭐해", "뭐하니", "안녕하세요"]
         is_greeting = any(greeting in request.query.lower() for greeting in greetings)
 
         if is_greeting:
+            query_type = "greeting"
+            answer = "안녕하세요! 문서에 대해 궁금한 점이 있으시면 질문해 주세요."
+
+            # Log greeting query
+            query_log = QueryLog(
+                timestamp=datetime.now().isoformat(),
+                session_id=session_id,
+                query=request.query,
+                query_type=query_type,
+                model_name=config.OLLAMA_MODEL,
+                model_response=answer,
+                performance_metrics=PerformanceMetrics(
+                    total_time_ms=(time.time() - start_time) * 1000
+                )
+            )
+            query_logger.log_query(query_log)
+
             return QueryResponse(
                 query=request.query,
-                answer="안녕하세요! 문서에 대해 궁금한 점이 있으시면 질문해 주세요.",
+                answer=answer,
                 key_facts=[],
-                sources=[],  # No sources for greetings
-                metadata={"type": "greeting"}
+                sources=[],
+                metadata={"type": "greeting", "session_id": session_id}
             )
 
         # 1. Retrieve relevant documents
+        search_start = time.time()
         retriever = get_retriever()
         evidences = retriever.retrieve(
             request.query,
             limit=config.TOPK_BM25 + config.TOPK_VECTOR
         )
+        search_end = time.time()
 
         if not evidences:
+            query_type = "no_evidence"
             logger.warning("No evidences found")
+            answer = "죄송합니다. 질문과 관련된 문서를 찾을 수 없습니다. 다른 질문을 해주시거나 문서를 먼저 업로드해 주세요."
+
+            # Log no evidence query
+            query_log = QueryLog(
+                timestamp=datetime.now().isoformat(),
+                session_id=session_id,
+                query=request.query,
+                query_type=query_type,
+                model_name=config.OLLAMA_MODEL,
+                model_response=answer,
+                performance_metrics=PerformanceMetrics(
+                    search_time_ms=(search_end - search_start) * 1000,
+                    total_time_ms=(time.time() - start_time) * 1000
+                )
+            )
+            query_logger.log_query(query_log)
+
             return QueryResponse(
                 query=request.query,
-                answer="죄송합니다. 질문과 관련된 문서를 찾을 수 없습니다. 다른 질문을 해주시거나 문서를 먼저 업로드해 주세요.",
+                answer=answer,
                 key_facts=[],
-                sources=[],  # No sources when no documents found
-                error="no_evidence"
+                sources=[],
+                error="no_evidence",
+                metadata={"session_id": session_id}
             )
-        
+
         # 2. Rerank if available
+        rerank_start = time.time()
         reranker = get_reranker()
         if reranker.model or (reranker.use_onnx and hasattr(reranker, 'ort_session')):
             evidences = reranker.rerank(
@@ -132,25 +201,27 @@ async def process_query(request: QueryRequest) -> QueryResponse:
                 top_k=config.TOPK_RERANK
             )
         else:
-            # Use top K without reranking
             evidences = evidences[:config.TOPK_RERANK]
-        
+        rerank_end = time.time()
+
         # 3. Generate response
+        generation_start = time.time()
         generator = get_generator()
         response = await generator.generate(
             request.query,
             evidences,
             stream=request.stream
         )
-        
+        generation_end = time.time()
+
         # 4. Verify and enforce evidence
         enforcer = get_enforcer()
         response = enforcer.enforce_evidence(response, evidences)
-        
+
         # 5. Track citations
         citation_tracker = get_citation_tracker()
         response = citation_tracker.track_citations(response, evidences)
-        
+
         # 6. Format response
         formatter = get_formatter()
         response = formatter.format_response(response)
@@ -172,7 +243,71 @@ async def process_query(request: QueryRequest) -> QueryResponse:
             response["sources"] = []
             logger.info("Removed sources due to generic/unreliable response")
 
-        # 8. Create final response
+        # 8. Calculate metrics and log
+        end_time = time.time()
+
+        # Performance metrics
+        perf_metrics = PerformanceMetrics(
+            search_time_ms=(search_end - search_start) * 1000,
+            rerank_time_ms=(rerank_end - rerank_start) * 1000,
+            generation_time_ms=(generation_end - generation_start) * 1000,
+            total_time_ms=(end_time - start_time) * 1000
+        )
+
+        # Capture system performance
+        perf_metrics = query_logger.capture_performance_metrics()
+        perf_metrics.search_time_ms = (search_end - search_start) * 1000
+        perf_metrics.rerank_time_ms = (rerank_end - rerank_start) * 1000
+        perf_metrics.generation_time_ms = (generation_end - generation_start) * 1000
+        perf_metrics.total_time_ms = (end_time - start_time) * 1000
+
+        # Quality metrics
+        quality_metrics = query_logger.calculate_quality_metrics(
+            response,
+            evidences,
+            response.get("answer", "")
+        )
+
+        # Retrieval metrics
+        retrieval_metrics = RetrievalMetrics(
+            final_count=len(evidences)
+        )
+
+        # Convert evidences to SearchResult format
+        search_results = []
+        for ev in evidences[:10]:  # Log top 10 only
+            search_results.append(SearchResult(
+                chunk_id=ev.get('chunk_id', ''),
+                doc_id=ev.get('doc_id', ''),
+                page=ev.get('page', 0),
+                text_preview=ev.get('text', '')[:200],
+                rrf_score=ev.get('rrf_score', 0.0),
+                keyword_relevance=ev.get('keyword_relevance', 0.0),
+                bm25_score=ev.get('bm25_score', 0.0),
+                vector_score=ev.get('vector_score', 0.0),
+                include_reason=ev.get('include_reason', 'unknown')
+            ))
+
+        # Create and log query
+        query_log = QueryLog(
+            timestamp=datetime.now().isoformat(),
+            session_id=session_id,
+            query=request.query,
+            query_type=query_type,
+            extracted_keywords=request.query.split()[:10],  # Simple tokenization
+            retrieval_metrics=retrieval_metrics,
+            search_results=search_results,
+            model_name=config.OLLAMA_MODEL,
+            model_response=response.get("answer", ""),
+            response_sources=response.get("sources", []),
+            quality_metrics=quality_metrics,
+            performance_metrics=perf_metrics,
+            error_info=error_info
+        )
+
+        query_logger.log_query(query_log)
+
+        # 9. Create final response
         return QueryResponse(
             query=request.query,
             answer=response.get("answer", ""),
@@ -186,12 +321,35 @@ async def process_query(request: QueryRequest) -> QueryResponse:
             metadata={
                 "evidence_count": len(evidences),
                 "hallucination_detected": response.get("verification", {}).get("hallucination_detected", False),
-                "processing_time": 0  # TODO: Add timing
+                "processing_time": perf_metrics.total_time_ms,
+                "session_id": session_id
             }
         )
-        
+
     except Exception as e:
         logger.error(f"Query processing failed: {e}")
+
+        # Log error
+        error_info = ErrorInfo(
+            has_error=True,
+            error_type=type(e).__name__,
+            error_message=str(e),
+            error_traceback=""
+        )
+
+        query_log = QueryLog(
+            timestamp=datetime.now().isoformat(),
+            session_id=session_id,
+            query=request.query,
+            query_type="error",
+            model_name=config.OLLAMA_MODEL,
+            error_info=error_info,
+            performance_metrics=PerformanceMetrics(
+                total_time_ms=(time.time() - start_time) * 1000
+            )
+        )
+        query_logger.log_query(query_log)
+
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/stream")

@@ -1050,6 +1050,67 @@ async def send_message(
                 },
             )
 
+            # Log query details (non-streaming endpoint)
+            try:
+                from utils.query_logger import RetrievalMetrics, PerformanceMetrics, QualityMetrics, ErrorInfo
+
+                # Convert evidences to SearchResult format for retrieval metrics
+                search_results_for_metrics = [
+                    SearchResult(
+                        chunk_id=ev.get("chunk_id", ""),
+                        doc_id=ev.get("doc_id", ""),
+                        page=ev.get("page", 0),
+                        text_preview=ev.get("text", "")[:200],
+                        rrf_score=ev.get("rrf_score", 0.0),
+                        keyword_relevance=ev.get("keyword_relevance", 0.0),
+                        bm25_score=ev.get("bm25_score", 0.0),
+                        vector_score=ev.get("score", 0.0),
+                        include_reason=ev.get("include_reason", "unknown")
+                    )
+                    for ev in evidences[:10]  # Top 10 only
+                ]
+
+                # Create nested dataclass objects
+                retrieval_metrics = query_logger.calculate_retrieval_metrics(search_results_for_metrics)
+
+                # Calculate timing (approximation since we don't track precisely in this endpoint)
+                performance_metrics = query_logger.capture_performance_metrics()
+
+                quality_metrics = query_logger.calculate_quality_metrics(response, evidences, response.get("answer", ""))
+
+                query_log_entry = QueryLog(
+                    timestamp=datetime.now().isoformat(),
+                    session_id=session_id,
+                    query=request.query,
+                    query_type="normal",
+                    extracted_keywords=getattr(retriever_instance, '_last_keywords', []),
+                    retrieval_metrics=retrieval_metrics,
+                    search_results=[
+                        SearchResult(
+                            chunk_id=ev.get("chunk_id", ""),
+                            doc_id=ev.get("doc_id", ""),
+                            page=ev.get("page", 0),
+                            text_preview=ev.get("text", "")[:200],
+                            rrf_score=ev.get("rrf_score", 0.0),
+                            keyword_relevance=ev.get("keyword_relevance", 0.0),
+                            bm25_score=ev.get("bm25_score", 0.0),
+                            vector_score=ev.get("score", 0.0),
+                            include_reason=ev.get("include_reason", "unknown")
+                        )
+                        for ev in evidences[:10]  # Log top 10 only
+                    ],
+                    model_name=config.OLLAMA_MODEL,
+                    model_response=response.get("answer", ""),
+                    response_sources=sources,
+                    quality_metrics=quality_metrics,
+                    performance_metrics=performance_metrics,
+                    error_info=ErrorInfo()
+                )
+                query_logger.log_query(query_log_entry)
+                logger.info(f"✅ Logged query for session {session_id}")
+            except Exception as log_error:
+                logger.error(f"Failed to log query: {log_error}", exc_info=True)
+
             return QueryResponse(
                 query=request.query,
                 answer=response.get("answer", ""),
@@ -1588,17 +1649,34 @@ async def send_message_stream(
 
             # Log query details (스트리밍 엔드포인트)
             try:
+                from utils.query_logger import RetrievalMetrics, PerformanceMetrics, QualityMetrics, ErrorInfo
                 retriever_instance = get_retriever()
+
+                # Create nested dataclass objects
+                retrieval_metrics = RetrievalMetrics(
+                    bm25_count=getattr(retriever_instance, '_last_bm25_count', 0),
+                    vector_count=getattr(retriever_instance, '_last_vector_count', 0),
+                    rrf_count=getattr(retriever_instance, '_last_rrf_count', 0),
+                    final_count=len(evidences)
+                )
+
+                performance_metrics = PerformanceMetrics(
+                    search_time_ms=0.0,  # Not tracked in streaming
+                    generation_time_ms=0.0,  # Not tracked in streaming
+                    total_time_ms=0.0  # Not tracked in streaming
+                )
+
+                quality_metrics = QualityMetrics(
+                    confidence_score=response_payload.get("verification", {}).get("confidence", 0.0),
+                    source_count=len(sources)
+                )
+
                 query_log_entry = QueryLog(
                     timestamp=datetime.now().isoformat(),
                     session_id=session_id,
                     query=request.query,
                     extracted_keywords=getattr(retriever_instance, '_last_keywords', []),
-                    bm25_count=getattr(retriever_instance, '_last_bm25_count', 0),
-                    vector_count=getattr(retriever_instance, '_last_vector_count', 0),
-                    rrf_count=getattr(retriever_instance, '_last_rrf_count', 0),
-                    filtered_count=getattr(retriever_instance, '_last_filtered_count', 0),
-                    final_count=len(evidences),
+                    retrieval_metrics=retrieval_metrics,
                     search_results=[
                         SearchResult(
                             chunk_id=ev.get("chunk_id", ""),
@@ -1611,14 +1689,14 @@ async def send_message_stream(
                             vector_score=ev.get("score", 0.0),
                             include_reason=ev.get("include_reason", "unknown")
                         )
-                        for ev in evidences
+                        for ev in evidences[:10]  # Log top 10 only
                     ],
                     model_name=config.OLLAMA_MODEL,
                     model_response=full_response,
                     response_sources=sources,
-                    search_time_ms=0.0,  # Not tracked in streaming
-                    generation_time_ms=0.0,  # Not tracked in streaming
-                    total_time_ms=0.0  # Not tracked in streaming
+                    quality_metrics=quality_metrics,
+                    performance_metrics=performance_metrics,
+                    error_info=ErrorInfo()
                 )
                 query_logger.log_query(query_log_entry)
             except Exception as log_error:
@@ -1787,16 +1865,33 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
                         # Log query details
                         try:
+                            from utils.query_logger import RetrievalMetrics, PerformanceMetrics, QualityMetrics, ErrorInfo
+
+                            # Create nested dataclass objects
+                            retrieval_metrics = RetrievalMetrics(
+                                bm25_count=getattr(retriever, '_last_bm25_count', 0),
+                                vector_count=getattr(retriever, '_last_vector_count', 0),
+                                rrf_count=getattr(retriever, '_last_rrf_count', 0),
+                                final_count=len(evidences)
+                            )
+
+                            performance_metrics = PerformanceMetrics(
+                                search_time_ms=search_time_ms,
+                                generation_time_ms=generation_time_ms,
+                                total_time_ms=total_time_ms
+                            )
+
+                            quality_metrics = QualityMetrics(
+                                confidence_score=0.0,  # Not available in websocket endpoint
+                                source_count=len(response_data.get("sources", []))
+                            )
+
                             query_log_entry = QueryLog(
                                 timestamp=datetime.now().isoformat(),
                                 session_id=session_id,
                                 query=query,
                                 extracted_keywords=getattr(retriever, '_last_keywords', []),
-                                bm25_count=getattr(retriever, '_last_bm25_count', 0),
-                                vector_count=getattr(retriever, '_last_vector_count', 0),
-                                rrf_count=getattr(retriever, '_last_rrf_count', 0),
-                                filtered_count=getattr(retriever, '_last_filtered_count', 0),
-                                final_count=len(evidences),
+                                retrieval_metrics=retrieval_metrics,
                                 search_results=[
                                     SearchResult(
                                         chunk_id=ev.get("chunk_id", ""),
@@ -1809,14 +1904,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                         vector_score=ev.get("score", 0.0),
                                         include_reason=ev.get("include_reason", "unknown")
                                     )
-                                    for ev in evidences
+                                    for ev in evidences[:10]  # Log top 10 only
                                 ],
                                 model_name=config.OLLAMA_MODEL,
                                 model_response=full_response,
                                 response_sources=response_data.get("sources", []),
-                                search_time_ms=search_time_ms,
-                                generation_time_ms=generation_time_ms,
-                                total_time_ms=total_time_ms
+                                quality_metrics=quality_metrics,
+                                performance_metrics=performance_metrics,
+                                error_info=ErrorInfo()
                             )
                             query_logger.log_query(query_log_entry)
                         except Exception as log_error:

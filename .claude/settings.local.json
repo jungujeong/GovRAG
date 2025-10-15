@@ -49,7 +49,14 @@
       "Read(//Users/yummongi/**)",
       "Bash(rsync:*)",
       "Bash(npm --version)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(for i in {1..5})",
+      "Bash(do curl -s http://localhost:8000/api/health)",
+      "Bash(break)",
+      "Bash(done)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []
