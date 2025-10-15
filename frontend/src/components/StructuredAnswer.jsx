@@ -21,32 +21,31 @@ function StructuredAnswer({ answer }) {
   const detailsText = answer?.details ?? metadata.details ?? ''
   const sources = Array.isArray(answer?.sources) ? answer.sources : []
   
-  // Enhanced markdown renderer with comprehensive formatting
+  // Enhanced markdown renderer - FIXED: Preserve text structure
   const renderMarkdown = (text) => {
     if (!text) return text
-    
+
     // Process the text for various markdown patterns
     const processText = (str) => {
-      // Handle lists first
-      const listPattern = /^[-*•]\s+(.+)$/gm
-      const numberedListPattern = /^(\d+)\.\s+(.+)$/gm
-      
-      // First, handle explicit line breaks (\n)
-      // Split by double line breaks for paragraphs, or single line breaks
-      const paragraphs = str.split(/\n\n+|\n/)
-      
+      // IMPORTANT: Split ONLY by double line breaks (paragraphs), NOT single line breaks
+      // This preserves the structure of the formatted text from backend
+      const paragraphs = str.split(/\n\n+/)
+
       return paragraphs.map((paragraph, pIndex) => {
-        // Check if this paragraph is a list
-        const hasListItems = paragraph.match(listPattern)
-        const hasNumberedItems = paragraph.match(numberedListPattern)
-        
-        if (hasListItems || hasNumberedItems) {
-          const items = paragraph.split('\n').filter(item => item.trim())
+        if (!paragraph.trim()) return null
+
+        // Check if this paragraph contains list items (with line breaks inside)
+        const lines = paragraph.split('\n').filter(line => line.trim())
+
+        // Check if ALL lines are list items
+        const allBulletItems = lines.every(line => /^[-*•]\s+/.test(line))
+        const allNumberedItems = lines.every(line => /^\d+\.\s+/.test(line))
+
+        if (allBulletItems || allNumberedItems) {
           return (
             <ul key={pIndex} className="list-disc list-inside space-y-1 my-2">
-              {items.map((item, iIndex) => {
-                // Remove list markers
-                const cleanItem = item.replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, '')
+              {lines.map((line, iIndex) => {
+                const cleanItem = line.replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, '')
                 return (
                   <li key={iIndex} className="text-gray-800">
                     {formatInlineElements(cleanItem)}
@@ -56,13 +55,16 @@ function StructuredAnswer({ answer }) {
             </ul>
           )
         }
-        
-        // Check for sentence ending patterns that should trigger line breaks
-        const shouldBreak = paragraph.match(/[.!?]\s*$/)
-        
+
+        // For non-list paragraphs, preserve line breaks within the paragraph
         return (
-          <div key={pIndex} className={shouldBreak ? "mb-3" : "mb-1"}>
-            {formatInlineElements(paragraph)}
+          <div key={pIndex} className="mb-3">
+            {lines.map((line, lineIndex) => (
+              <React.Fragment key={lineIndex}>
+                {formatInlineElements(line)}
+                {lineIndex < lines.length - 1 && <br />}
+              </React.Fragment>
+            ))}
           </div>
         )
       })

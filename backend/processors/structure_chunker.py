@@ -2,13 +2,14 @@ import re
 from typing import List, Dict, Optional, Tuple
 import tiktoken
 import logging
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
 class StructureChunker:
     """Document structure-aware chunker with table/footnote handling"""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  chunk_tokens: int = 2048,
                  chunk_overlap: int = 256,
                  table_as_separate: bool = True,
@@ -17,7 +18,7 @@ class StructureChunker:
         self.chunk_overlap = chunk_overlap
         self.table_as_separate = table_as_separate
         self.footnote_backlink = footnote_backlink
-        
+
         # Use tiktoken for token counting
         try:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -307,86 +308,148 @@ class StructureChunker:
     def _format_directive_for_chunk(self, record: Dict) -> str:
         """Format directive record as searchable text"""
         parts = []
-        
+
         # Add title
         if record.get("title"):
             parts.append(f"제목: {record['title']}")
-        
+
         # Add category
         if record.get("category"):
             parts.append(f"분류: {record['category']}")
-        
+
         # Add main directive text
         if record.get("directive"):
             parts.append(f"내용: {record['directive']}")
-        
+
         # Add body if different from directive
         if record.get("body") and record["body"] != record.get("directive", ""):
             parts.append(f"상세: {record['body']}")
-        
+
         # Add departments
         if record.get("departments"):
             parts.append(f"담당부서: {', '.join(record['departments'])}")
-        
+
         # Add deadline
         if record.get("deadline"):
             parts.append(f"처리기한: {record['deadline']}")
-        
+
         # Add source info
         parts.append(f"출처: {record.get('source_file', '')} (페이지 {record.get('page', 1)})")
-        
-        return "\n".join(parts)
+
+        formatted_text = "\n".join(parts)
+
+        # Clean text before returning (ROOT CAUSE FIX)
+        return self._clean_text_for_indexing(formatted_text)
     
     def _create_chunk(self, text: str, doc_id: str, section_or_page: int,
                      chunk_id: int, page: int, start_char: int, end_char: int) -> Dict:
-        """Create a chunk dictionary"""
+        """Create a chunk dictionary
+
+        CRITICAL: Clean text at indexing time to prevent problematic characters
+        from entering the evidence database. This is the ROOT CAUSE fix.
+        """
+        # Clean text before storing in index (ROOT CAUSE FIX)
+        cleaned_text = self._clean_text_for_indexing(text)
+
         return {
             "chunk_id": f"{doc_id}-chunk-{chunk_id}",
             "doc_id": doc_id,
             "section_or_page": section_or_page,
             "page": page,
-            "text": text,
+            "text": cleaned_text,  # Store cleaned text
             "start_char": start_char,
             "end_char": end_char,
             "type": "content",
-            "tokens": self._count_tokens(text)
+            "tokens": self._count_tokens(cleaned_text)
         }
+
+    def _clean_text_for_indexing(self, text: str) -> str:
+        """Clean text at indexing time (ROOT CAUSE FIX)
+
+        This prevents problematic characters from entering the evidence database.
+        Better than post-processing LLM output.
+
+        Removes:
+        - Private Use Area Unicode (U+E000-U+F8FF) like 󰏅
+        - Control characters (Cc, Cf, Cn) except whitespace
+        - Normalizes whitespace
+        """
+        if not text:
+            return ""
+
+        # Step 1: Remove Private Use Area Unicode (U+E000-U+F8FF)
+        # These are proprietary symbols from PDF/HWP that have no universal meaning
+        cleaned = re.sub(r'[\uE000-\uF8FF]', '', text)
+
+        # Step 2: Remove problematic Unicode categories
+        # Cc = Control characters, Cf = Format characters, Cn = Unassigned
+        # Keep whitespace (\n, \t, space) for structure
+        cleaned = ''.join(
+            char for char in cleaned
+            if unicodedata.category(char) not in ('Cc', 'Cf', 'Cn')
+            or char in ('\n', '\t', ' ')
+        )
+
+        # Step 3: Normalize whitespace (statistical approach)
+        # Collapse multiple spaces/tabs but preserve line breaks
+        lines = cleaned.split('\n')
+        normalized_lines = [re.sub(r'[ \t]+', ' ', line.strip()) for line in lines]
+
+        # Remove excessive blank lines (max 2 consecutive)
+        result_lines = []
+        blank_count = 0
+        for line in normalized_lines:
+            if not line:
+                blank_count += 1
+                if blank_count <= 2:
+                    result_lines.append(line)
+            else:
+                blank_count = 0
+                result_lines.append(line)
+
+        return '\n'.join(result_lines).strip()
     
-    def _create_table_chunk(self, table: Dict, doc_id: str, 
+    def _create_table_chunk(self, table: Dict, doc_id: str,
                            section_or_page: int, chunk_id: int) -> Dict:
         """Create a chunk for a table"""
         # Convert table to text
         table_text = self._table_to_text(table)
-        
+
+        # Clean text before storing (ROOT CAUSE FIX)
+        cleaned_text = self._clean_text_for_indexing(table_text)
+
         return {
             "chunk_id": f"{doc_id}-table-{chunk_id}",
             "doc_id": doc_id,
             "section_or_page": section_or_page,
             "page": table.get("page_num", section_or_page),
-            "text": table_text,
+            "text": cleaned_text,
             "start_char": 0,
-            "end_char": len(table_text),
+            "end_char": len(cleaned_text),
             "type": "table",
             "table_id": table.get("table_id", ""),
-            "tokens": self._count_tokens(table_text)
+            "tokens": self._count_tokens(cleaned_text)
         }
     
     def _create_footnote_chunk(self, footnote: Dict, doc_id: str,
                               section_id: int, chunk_id: int) -> Dict:
         """Create a chunk for a footnote"""
         footnote_text = f"[각주 {footnote.get('number', '')}] {footnote.get('text', '')}"
-        
+
+        # Clean text before storing (ROOT CAUSE FIX)
+        cleaned_text = self._clean_text_for_indexing(footnote_text)
+
         return {
             "chunk_id": f"{doc_id}-footnote-{chunk_id}",
             "doc_id": doc_id,
             "section_or_page": section_id,
             "page": 0,  # Footnotes don't have specific page
-            "text": footnote_text,
+            "text": cleaned_text,
             "start_char": 0,
-            "end_char": len(footnote_text),
+            "end_char": len(cleaned_text),
             "type": "footnote",
             "footnote_id": footnote.get("footnote_id", ""),
-            "tokens": self._count_tokens(footnote_text)
+            "tokens": self._count_tokens(cleaned_text)
         }
     
     def _table_to_text(self, table: Dict) -> str:

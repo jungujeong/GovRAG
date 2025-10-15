@@ -15,7 +15,7 @@ class ResponsePostProcessor:
     """Simple postprocessor for RAG responses"""
 
     def __init__(self):
-        self.enabled = True
+        self.enabled = False  # DISABLED: Too aggressive - destroys valid LLM responses
         self._token_pattern = re.compile(r'[가-힣A-Za-z]{2,}')
 
     def process(

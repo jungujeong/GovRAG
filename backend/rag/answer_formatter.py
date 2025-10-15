@@ -17,20 +17,24 @@ class AnswerFormatter:
         }
     
     def format_response(self, response: Dict, allowed_doc_ids: Optional[List[str]] = None) -> Dict:
-        """Format response according to schema"""
+        """Format response according to schema
+
+        SIMPLIFIED APPROACH:
+        - Trust citation_map from citation_tracker
+        - Only format display, don't renumber citations
+        - NO duplicate filtering/renumbering logic
+        """
 
         # Clean up response content first
         response = self._clean_response_content(response)
 
-        # Skip invalid source removal for now - it's removing all citations
-        # if allowed_doc_ids:
-        #     response = self._remove_invalid_source_refs(response, allowed_doc_ids)
-
-        # If citation_map exists (from tracker), trust it and avoid extra renumbering
+        # SIMPLIFIED: Only process citations if no citation_map exists
+        # Otherwise trust the citation_tracker's work
         if not response.get("citation_map"):
-            response = self._filter_cited_sources(response)
-            response = self._reorder_citations(response)
+            logger.warning("No citation_map found - applying basic citation extraction")
+            response = self._extract_cited_sources_simple(response)
 
+        # Format for display
         formatted = {
             "formatted_text": self._format_as_text(response),
             "formatted_html": self._format_as_html(response),
@@ -44,91 +48,120 @@ class AnswerFormatter:
         return response
     
     def _clean_response_content(self, response: Dict) -> Dict:
-        """Clean up response content to ensure Korean-only and accurate department names"""
-        # Clean answer
+        """MINIMAL cleaning - preserve LLM output as much as possible
+
+        Previously destroyed responses with aggressive Korean-only filtering.
+        Now only does basic whitespace normalization.
+        """
+        logger.info("="*80)
+        logger.info("BEFORE CLEANING:")
+        logger.info(f"  answer: {response.get('answer', '')[:300]}")
+        logger.info(f"  key_facts: {response.get('key_facts', [])[:2]}")
+        logger.info("="*80)
+
+        # Minimal cleaning - only normalize whitespace
         if response.get("answer"):
-            response["answer"] = self._clean_text(response["answer"])
-        
-        # Clean key facts
+            response["answer"] = self._normalize_whitespace(response["answer"])
+
         if response.get("key_facts"):
-            response["key_facts"] = [self._clean_text(fact) for fact in response["key_facts"]]
-        
-        # Clean details
+            response["key_facts"] = [self._normalize_whitespace(fact) for fact in response["key_facts"]]
+
         if response.get("details"):
-            response["details"] = self._clean_text(response["details"])
-        
+            response["details"] = self._normalize_whitespace(response["details"])
+
+        logger.info("AFTER CLEANING:")
+        logger.info(f"  answer: {response.get('answer', '')[:300]}")
+        logger.info(f"  key_facts: {response.get('key_facts', [])[:2]}")
+        logger.info("="*80)
+
         return response
     
-    def _clean_text(self, text: str) -> str:
-        """Clean text to keep only Korean and necessary characters"""
+    def _normalize_whitespace(self, text: str) -> str:
+        """Normalize whitespace AND remove special characters for readability.
+
+        UPDATED: Now also removes private use area Unicode and control characters
+        that harm readability (like 󰏅 from PDF extraction).
+        """
         if not text:
             return text
 
-        # Filter to keep only Korean, ASCII, and common punctuation (preserve newlines)
-        cleaned_chars = []
-        for char in text:
-            if char == '\n':
-                cleaned_chars.append(char)
-                continue
-            code = ord(char)
-            # Keep Korean characters
-            if (0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
-                0x1100 <= code <= 0x11FF or  # Hangul Jamo
-                0x3130 <= code <= 0x318F or  # Hangul Compatibility Jamo
-                0xA960 <= code <= 0xA97F or  # Hangul Jamo Extended-A
-                0xD7B0 <= code <= 0xD7FF):   # Hangul Jamo Extended-B
-                cleaned_chars.append(char)
-            # Keep ASCII printable characters
-            elif 0x0020 <= code <= 0x007E:
-                cleaned_chars.append(char)
-            # Keep common Korean punctuation
-            elif char in '·、。「」『』〈〉《》【】〔〕':
-                cleaned_chars.append(char)
-            # Replace other characters with space
+        # STEP 1: Remove special characters (private use area Unicode, etc.)
+        text = self._clean_special_characters(text)
+
+        # STEP 2: Collapse multiple spaces/tabs per line (preserve newlines)
+        lines = text.split('\n')
+        normalized_lines = [re.sub(r'[ \t]+', ' ', line.strip()) for line in lines]
+
+        # STEP 3: Remove excessive blank lines (more than 2 consecutive)
+        result_lines = []
+        blank_count = 0
+        for line in normalized_lines:
+            if not line:
+                blank_count += 1
+                if blank_count <= 2:  # Allow up to 2 blank lines
+                    result_lines.append(line)
             else:
-                cleaned_chars.append(' ')
+                blank_count = 0
+                result_lines.append(line)
 
-        # Collapse spaces per line but preserve line breaks
-        result = ''.join(cleaned_chars)
-        lines = []
-        for ln in result.splitlines(True):  # keepends
-            lines.append(re.sub(r'[ \t]+', ' ', ln))
-        result = ''.join(lines)
+        return '\n'.join(result_lines).strip()
 
-        # Ensure department names are properly formatted (comma-separated)
-        result = re.sub(r'([가-힣]+과)\s+([가-힣]+과)', r'\1, \2', result)
+    def _clean_special_characters(self, text: str) -> str:
+        """Remove special characters that harm readability
 
-        return result.strip()
+        Removes problematic characters like private use area Unicode (󰏅)
+        and other non-printable or special characters from PDF/HWP extraction.
+        This is the same cleaning logic used in citation_tracker.
+        """
+        if not text:
+            return ""
+
+        # Remove private use area Unicode characters (U+E000 to U+F8FF)
+        cleaned = re.sub(r'[\uE000-\uF8FF]', '', text)
+
+        # Remove other problematic Unicode categories
+        import unicodedata
+        cleaned = ''.join(
+            char for char in cleaned
+            if unicodedata.category(char) not in ('Cc', 'Cf', 'Cn')
+            or char in ('\n', '\t', ' ')  # Keep whitespace
+        )
+
+        return cleaned
+
+    def _clean_text(self, text: str) -> str:
+        """DEPRECATED: Use _normalize_whitespace instead"""
+        return self._normalize_whitespace(text)
     
     def _format_as_text(self, response: Dict) -> str:
-        """Format as plain text"""
-        lines = []
-        
-        # 1. Core answer - ensure proper line breaks
-        if response.get("answer"):
-            lines.append(f"{self.section_headers['answer']}")
-            # Add line breaks for better readability
-            answer_text = self._add_natural_line_breaks(response["answer"])
-            lines.append(answer_text)
-            lines.append("")
-        
-        # 2. Key facts
-        if response.get("key_facts"):
-            lines.append(f"{self.section_headers['key_facts']}")
-            for fact in response["key_facts"]:
-                lines.append(f"  • {fact}")
-            lines.append("")
-        
-        # 3. Details (optional)
-        if response.get("details"):
-            lines.append(f"{self.section_headers['details']}")
-            details_text = self._add_natural_line_breaks(response["details"])
-            lines.append(details_text)
-            lines.append("")
-        
-        # 4. Sources (omit in formatted_text; UI renders structured sources separately)
-        
-        return "\n".join(lines)
+        """Format as plain text - preserve LLM output structure
+
+        Strategy: Use LLM's natural formatting instead of forcing rigid sections.
+        Only add line breaks for readability using statistical approach.
+        """
+        # If answer already has good structure (markdown headings), use it directly
+        answer = response.get("answer", "")
+
+        if not answer:
+            return ""
+
+        # Check if answer already has markdown structure (###, ##, etc.)
+        has_markdown_structure = bool(re.search(r'^#{1,3}\s', answer, re.MULTILINE))
+
+        if has_markdown_structure:
+            # LLM already formatted well - just add natural line breaks
+            logger.info("LLM response has markdown structure - preserving it")
+            formatted = self._add_natural_line_breaks(answer)
+        else:
+            # Add section header only if no structure present
+            logger.info("LLM response lacks structure - adding minimal formatting")
+            formatted = f"{self.section_headers['answer']}\n{self._add_natural_line_breaks(answer)}"
+
+        # Log the formatting decision
+        logger.info(f"Formatted text length: {len(formatted)} chars")
+        logger.info(f"Has markdown: {has_markdown_structure}")
+
+        return formatted
     
     def _format_as_html(self, response: Dict) -> str:
         """Format as HTML"""
@@ -263,6 +296,37 @@ class AnswerFormatter:
         # Clean details
         if details:
             response["details"] = self._clean_invalid_citations(details, valid_citations)
+
+        return response
+
+    def _extract_cited_sources_simple(self, response: Dict) -> Dict:
+        """Simple citation extraction without complex renumbering
+
+        Only used as fallback when citation_map doesn't exist.
+        Extracts citation numbers [1], [2] etc. from answer text.
+        """
+        answer_text = response.get("answer", "")
+        sources = response.get("sources", [])
+
+        if not sources:
+            return response
+
+        # Extract all citation numbers from answer
+        citation_pattern = re.compile(r'\[(\d+)\]')
+        cited_numbers = set(int(num) for num in citation_pattern.findall(answer_text))
+
+        logger.info(f"Simple extraction found citations: {sorted(cited_numbers)}")
+
+        # Keep only cited sources, preserve original numbering
+        cited_sources = []
+        for idx, source in enumerate(sources, 1):
+            if idx in cited_numbers:
+                source["display_index"] = idx
+                source["original_index"] = idx
+                cited_sources.append(source)
+
+        response["sources"] = cited_sources
+        logger.info(f"Extracted {len(cited_sources)} cited sources (simple mode)")
 
         return response
 

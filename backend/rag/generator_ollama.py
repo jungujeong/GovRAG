@@ -107,109 +107,60 @@ class OllamaGenerator:
                             continue
     
     def _parse_response(self, content: str) -> Dict:
-        """Parse LLM response into structured format"""
-        
+        """Parse LLM response into structured format
+
+        Strategy: Preserve LLM output as much as possible, only extract citations.
+        Do NOT force-parse into rigid sections - let LLM's natural formatting shine.
+        """
+
         # Remove think tags if present
         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-        
-        # Clean up any non-Korean language remnants
-        content = self._clean_non_korean(content)
-        
-        # Initialize result
+
+        logger.info("="*80)
+        logger.info("RAW LLM RESPONSE (after think-tag removal):")
+        logger.info(content[:1000])
+        logger.info("="*80)
+
+        # Initialize result - use raw content as answer by default
         result = {
-            "answer": "",
+            "answer": content,  # Use raw content directly
             "key_facts": [],
             "details": "",
             "sources": [],
             "raw_response": content
         }
-        
-        # Try to parse structured sections
-        lines = content.strip().split('\n')
-        current_section = None
-        
-        for line in lines:
-            line = line.strip()
-            
-            # Detect sections
-            if "핵심 답변" in line or "답변:" in line:
-                current_section = "answer"
-                continue
-            elif "주요 사실" in line or "사실:" in line:
-                current_section = "key_facts"
-                continue
-            elif "상세 설명" in line or "설명:" in line:
-                current_section = "details"
-                continue
-            elif "출처" in line or "참조:" in line:
-                current_section = "sources"
-                continue
-            
-            # Add content to sections
-            if current_section == "answer" and line:
-                cleaned_line = self._clean_non_korean(line)
-                result["answer"] += cleaned_line + " "
-            elif current_section == "key_facts" and line:
-                cleaned_line = self._clean_non_korean(line)
-                if cleaned_line.startswith(("-", "•", "*", "·")):
-                    result["key_facts"].append(cleaned_line[1:].strip())
-                elif cleaned_line:
-                    result["key_facts"].append(cleaned_line)
-            elif current_section == "details" and line:
-                cleaned_line = self._clean_non_korean(line)
-                result["details"] += cleaned_line + " "
-            elif current_section == "sources" and line:
-                # Parse source format
-                source = self._parse_source(line)
-                if source:
-                    result["sources"].append(source)
-        
-        # Clean up
-        result["answer"] = result["answer"].strip()
-        result["details"] = result["details"].strip()
-        
-        # If no structured parsing worked, use whole content as answer
-        if not result["answer"] and not result["key_facts"]:
-            result["answer"] = self._clean_non_korean(content.strip())
-        
+
+        # Extract citation numbers for source tracking
+        # Pattern: [1], [2], etc.
+        citation_pattern = re.compile(r'\[(\d+)\]')
+        citations = citation_pattern.findall(content)
+        if citations:
+            logger.info(f"Extracted citations from response: {citations}")
+
+        # Log final parsed result
+        logger.info("PARSED RESPONSE STRUCTURE:")
+        logger.info(f"  answer: {result['answer'][:200]}...")
+        logger.info(f"  key_facts: {len(result['key_facts'])} items")
+        logger.info(f"  details: {len(result['details'])} chars")
+        logger.info(f"  citations: {citations}")
+
         return result
     
     def _clean_non_korean(self, text: str) -> str:
-        """Remove non-Korean content while preserving line breaks and spacing semantics."""
+        """DEPRECATED: Minimal cleaning only - preserve all content.
+
+        This function previously destroyed LLM output by removing non-Korean chars.
+        Now it only does basic whitespace normalization.
+        """
         if not text:
             return text
 
-        out_chars = []
-        for ch in text:
-            # Preserve newlines and tabs to avoid merging tokens across lines
-            if ch in ('\n', '\t'):
-                out_chars.append(ch)
-                continue
-            code = ord(ch)
-            if (
-                0xAC00 <= code <= 0xD7AF or  # Hangul Syllables
-                0x1100 <= code <= 0x11FF or  # Hangul Jamo
-                0x3130 <= code <= 0x318F or  # Hangul Compatibility Jamo
-                0xA960 <= code <= 0xA97F or  # Hangul Jamo Extended-A
-                0xD7B0 <= code <= 0xD7FF     # Hangul Jamo Extended-B
-            ):
-                out_chars.append(ch)
-            elif 0x0020 <= code <= 0x007E:  # Basic ASCII printable
-                out_chars.append(ch)
-            elif ch in '·、。「」『』〈〉《》【】〔〕':
-                out_chars.append(ch)
-            else:
-                out_chars.append(' ')
+        # Only normalize excessive whitespace (statistical approach)
+        # Collapse multiple spaces/tabs to single space per line
+        lines = text.split('\n')
+        cleaned_lines = [re.sub(r'[ \t]+', ' ', line) for line in lines]
 
-        # Collapse spaces per line but preserve line boundaries
-        cleaned_lines = []
-        for line in ''.join(out_chars).splitlines(True):  # keepends=True
-            # Replace runs of spaces/tabs with a single space
-            replaced = re.sub(r'[ \t]+', ' ', line)
-            cleaned_lines.append(replaced)
-
-        result = ''.join(cleaned_lines)
-        return result.strip('\n')
+        return '\n'.join(cleaned_lines).strip()
     
     def _parse_source(self, line: str) -> Optional[Dict]:
         """Parse source citation line"""

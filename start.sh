@@ -2,6 +2,28 @@
 
 # RAG 시스템 시작 스크립트
 
+# Lockfile to prevent multiple instances
+LOCKFILE="/tmp/rag_chatbot.lock"
+
+if [ -f "$LOCKFILE" ]; then
+    echo "❌ 시스템이 이미 실행 중입니다."
+    echo "   lockfile: $LOCKFILE"
+    echo "   강제 재시작하려면: rm $LOCKFILE && ./stop.sh && ./start.sh"
+    exit 1
+fi
+
+# Create lockfile
+touch "$LOCKFILE"
+
+# Cleanup function
+cleanup() {
+    rm -f "$LOCKFILE"
+    kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
+}
+
+# Set trap for cleanup on exit
+trap cleanup EXIT INT TERM
+
 echo "🚀 RAG Chatbot 시스템을 시작합니다..."
 echo ""
 
@@ -58,13 +80,14 @@ fi
 # 프론트엔드 시작
 echo ""
 echo "🎨 프론트엔드 서버를 시작합니다..."
-(cd frontend && npm run dev) > logs/frontend.log 2>&1 &
+# Node 18 경로 설정 및 프론트엔드 직접 시작
+(cd frontend && export PATH="$HOME/.nvm/versions/node/v18.20.8/bin:$PATH" && nohup npm run dev > ../logs/frontend.log 2>&1) &
 FRONTEND_PID=$!
 echo "   PID: $FRONTEND_PID"
 
-# PID 저장
-echo "$BACKEND_PID" > .backend.pid
-echo "$FRONTEND_PID" > .frontend.pid
+# PID 저장 (atomic write to prevent macOS file conflicts)
+echo "$BACKEND_PID" > .backend.pid.tmp && mv -f .backend.pid.tmp .backend.pid
+echo "$FRONTEND_PID" > .frontend.pid.tmp && mv -f .frontend.pid.tmp .frontend.pid
 
 echo ""
 echo "✅ 서버가 시작되었습니다!"

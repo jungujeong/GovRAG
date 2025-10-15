@@ -39,13 +39,16 @@ class TwoStageRetrieval:
         self,
         retriever,
         context_boost: float = 0.15,
-        topic_change_threshold: float = 0.10
+        topic_change_threshold: float = 0.03  # IMPROVED: More sensitive (was 0.10)
     ):
         """
         Args:
             retriever: HybridRetriever instance
             context_boost: Score boost for context documents (default 0.15 = 15%)
-            topic_change_threshold: Minimum score margin to detect topic change
+            topic_change_threshold: Minimum score margin to detect topic change (default 0.03 = 3%)
+                                   Lowered to detect topic changes more aggressively.
+                                   With 15% context boost, a 3% threshold means new docs need
+                                   to score ~18% higher to trigger topic change.
         """
         self.retriever = retriever
         self.context_boost = context_boost
@@ -214,7 +217,7 @@ class TwoStageRetrieval:
 def create_two_stage_retrieval(
     retriever,
     context_boost: float = 0.15,
-    topic_change_threshold: float = 0.10
+    topic_change_threshold: float = 0.03  # IMPROVED: More sensitive (was 0.10)
 ) -> TwoStageRetrieval:
     """
     Factory function to create TwoStageRetrieval instance.
@@ -222,7 +225,8 @@ def create_two_stage_retrieval(
     Args:
         retriever: HybridRetriever instance
         context_boost: Score boost for context documents (default 0.15)
-        topic_change_threshold: Minimum margin for topic change (default 0.10)
+        topic_change_threshold: Minimum margin for topic change (default 0.03)
+                               Lowered to detect topic changes more aggressively
 
     Returns:
         TwoStageRetrieval instance

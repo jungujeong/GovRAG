@@ -36,4 +36,7 @@ stop_by_port 5173
 # Clean up any stale pid files if present
 rm -f .backend.pid .frontend.pid
 
+# Remove lockfile
+rm -f /tmp/rag_chatbot.lock
+
 echo "System stopped."

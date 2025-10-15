@@ -8,14 +8,20 @@ from config import config
 logger = logging.getLogger(__name__)
 
 class EvidenceEnforcer:
-    """Enforce evidence-only generation with verification"""
-    
+    """Enforce evidence-only generation with verification
+
+    IMPROVED APPROACH:
+    - Moderate thresholds that actually work
+    - Focus on content overlap, not strict word matching
+    - Provide warnings but don't block responses
+    """
+
     def __init__(self):
-        # Very low thresholds for small models like qwen3:4b
-        # Essentially bypassing enforcement for now
-        self.jaccard_threshold = 0.01  # Almost disabled
-        self.sent_sim_threshold = 0.1  # Very relaxed
-        self.confidence_min = 0.05  # Minimal confidence required
+        # Balanced thresholds - strict enough to catch hallucinations
+        # but lenient enough for paraphrasing
+        self.jaccard_threshold = 0.25  # Moderate word overlap required
+        self.sent_sim_threshold = 0.60  # Allow paraphrasing but not fabrication
+        self.confidence_min = 0.40  # Meaningful confidence threshold
     
     def verify_response(self,
                        response: Dict,
@@ -167,30 +173,39 @@ class EvidenceEnforcer:
                         evidences: List[Dict],
                         allowed_doc_ids: Optional[List[str]] = None,
                         max_retries: int = 2) -> Dict:
-        """Enforce evidence-only generation with retries"""
+        """Enforce evidence-only generation with verification
 
-        # Filter sources if allowed_doc_ids is provided
-        if allowed_doc_ids and "sources" in response:
-            filtered_sources = []
-            for source in response.get("sources", []):
-                if source.get("doc_id") in allowed_doc_ids:
-                    filtered_sources.append(source)
-                else:
-                    logger.warning(f"Removing source from unexpected doc: {source.get('doc_id')}")
-            response["sources"] = filtered_sources
+        IMPROVED APPROACH:
+        - NO source filtering here (already done in chat.py)
+        - Actually use verification results
+        - Add quality indicators to response
+        """
+
+        # NO filtering - sources are already filtered in chat.py
+        # This eliminates duplicate logic
 
         is_valid, verification = self.verify_response(response, evidences)
-        
+
         # Always add verification info
         response["verification"] = verification
-        
-        # For now, always return the response even if verification fails
-        # Just log the warning but don't block the response
-        if not is_valid:
-            logger.warning(f"Response verification scores: {verification}")
-            # Add warning to response but still return it
-            response["verification_warning"] = "Low confidence score"
-        
+
+        # Add quality assessment based on verification scores
+        confidence = verification.get("confidence", 0)
+        jaccard = verification.get("jaccard_score", 0)
+        hallucination = verification.get("hallucination_detected", False)
+
+        if hallucination or confidence < 0.3:
+            response["quality_level"] = "low"
+            response["verification_warning"] = "답변의 신뢰도가 낮습니다. 근거 문서를 직접 확인하세요."
+            logger.warning(f"Low quality response detected - confidence: {confidence:.2f}, jaccard: {jaccard:.2f}")
+        elif confidence < 0.5:
+            response["quality_level"] = "medium"
+            response["verification_notice"] = "답변 일부가 문서 표현과 다를 수 있습니다."
+            logger.info(f"Medium quality response - confidence: {confidence:.2f}, jaccard: {jaccard:.2f}")
+        else:
+            response["quality_level"] = "high"
+            logger.info(f"High quality response - confidence: {confidence:.2f}, jaccard: {jaccard:.2f}")
+
         return response
 
     def _check_entity_hallucination(self, response_text: str, evidence_text: str) -> List[str]:

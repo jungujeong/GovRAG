@@ -722,8 +722,9 @@ async def send_message(
                     session_id=session_id
                 )
             
-            # 2. Rerank if available (후속 질문에서도 항상 reranking 수행)
-            # 첫 답변 evidences 재사용 로직 제거 - 항상 새로 검색한 evidence를 rerank
+            # 2. Rerank if available
+            # SIMPLIFIED: NO additional filtering after reranking
+            # Trust that evidences are already properly filtered from retrieval
             reranker_instance = get_reranker()
             if reranker_instance and (
                 reranker_instance.model or (
@@ -739,41 +740,19 @@ async def send_message(
             else:
                 evidences = evidences[:config.TOPK_RERANK]
 
-            # 2.5 리랭킹 후 후속 질문인 경우 문서 범위 필터링
-            # IMPORTANT: 'expanded' 모드는 topic change를 의미하므로 필터링하지 않음
-            if should_use_previous_sources and previous_doc_ids and doc_scope_mode != "expanded":
-                filtered_evidences = []
-                for e in evidences:
-                    if e.get("doc_id") in previous_doc_ids:
-                        filtered_evidences.append(e)
-                    else:
-                        logger.warning(f"Post-rerank filtering out evidence from unexpected doc: {e.get('doc_id')}")
-                evidences = filtered_evidences
-                logger.info(f"Post-rerank filter: {len(evidences)} evidences from {previous_doc_ids}")
-            elif doc_scope_mode == "expanded":
-                logger.info(f"Skipping post-rerank filter due to expanded mode (topic change detected)")
-
-            # 클라이언트 연결이 끊겼다면 즉시 중단
+            # Client disconnect check
             if cancel_event.is_set():
                 raise HTTPException(status_code=499, detail="Client closed request")
 
-            # 2.6 생성 전 최종 필터링 - 후속 질문인 경우
-            # IMPORTANT: 'expanded' 모드는 topic change를 의미하므로 필터링하지 않음
-            if should_use_previous_sources and previous_doc_ids and doc_scope_mode != "expanded":
-                # evidences를 다시 한번 확인
-                final_evidences = []
-                for e in evidences:
-                    doc_id = e.get("doc_id")
-                    if doc_id in previous_doc_ids:
-                        final_evidences.append(e)
-                    else:
-                        logger.error(f"Evidence from unexpected document {doc_id} detected and removed")
-                evidences = final_evidences
-                logger.info(f"Final pre-generation filter: {len(evidences)} evidences from allowed documents")
-            elif doc_scope_mode == "expanded":
-                logger.info(f"Skipping pre-generation filter due to expanded mode (topic change detected)")
-
             # 3. Generate with context (취소 가능 태스크로 실행)
+            logger.info("="*80)
+            logger.info("GENERATION INPUT:")
+            logger.info(f"  Query: {request.query}")
+            logger.info(f"  Evidence count: {len(evidences)}")
+            logger.info(f"  Context messages: {len(context)}")
+            logger.info(f"  Doc scope: {doc_scope_metadata}")
+            logger.info("="*80)
+
             gen_task = asyncio.create_task(
                 get_generator().generate_with_context(
                     request.query,
@@ -827,6 +806,14 @@ async def send_message(
                 raise HTTPException(status_code=499, detail="Client closed request")
             
             # 4. Ground and verify response (respect resolved scope)
+            logger.info("="*80)
+            logger.info("GENERATION OUTPUT (raw):")
+            logger.info(f"  answer: {response.get('answer', '')[:500]}")
+            logger.info(f"  key_facts: {response.get('key_facts', [])}")
+            logger.info(f"  details: {response.get('details', '')[:200]}")
+            logger.info(f"  sources: {len(response.get('sources', []))} items")
+            logger.info("="*80)
+
             response = get_response_grounder().ground(response, evidences)
             response = postprocessor.process(response, evidences, query=request.query)
 
@@ -835,79 +822,67 @@ async def send_message(
             if validation_issues:
                 logger.info("Response validator issues: %s", validation_issues[:5])
 
-            # 4.1 생성된 response에서 sources 강제 필터링
-            if allowed_docs_enforce and "sources" in response:
-                original_sources = response.get("sources", [])
-                filtered_sources = []
-                for src in original_sources:
-                    if src.get("doc_id") in allowed_docs_enforce:
-                        filtered_sources.append(src)
-                    else:
-                        logger.error(f"CRITICAL: Generated source from {src.get('doc_id')} not in allowed docs! Removing.")
-                response["sources"] = filtered_sources
-                logger.info(f"Filtered sources: {len(original_sources)} -> {len(filtered_sources)}")
+            # SIMPLIFIED: Trust evidence filtering from retrieval stage
+            # NO additional source filtering here
+            response = enforcer.enforce_evidence(response, evidences, allowed_doc_ids=None)
 
-            response = enforcer.enforce_evidence(response, evidences, allowed_doc_ids=allowed_docs_enforce)
-
-            # 5. Track citations (with document filtering for follow-up questions)
+            # 5. Track citations
+            # Pass allowed_docs for logging only, not for filtering
             allowed_docs = allowed_docs_enforce
 
             # Use fixed citation map for follow-up questions
-            fixed_citation_map = session.first_response_citation_map if should_use_previous_sources and session.first_response_citation_map else None
-
-            # Guard fixed citation map usage: only when scope/doc set unchanged and evidence count matches
-            if fixed_citation_map:
-                logger.info(f"🔵 FOLLOW-UP - Using fixed citation map")
-                logger.info(f"  - Fixed citation map: {fixed_citation_map}")
-                logger.info(f"  - Evidences count: {len(evidences)}")
+            # IMPROVED: More lenient matching for citation map stability
+            fixed_citation_map = None
+            if should_use_previous_sources and session.first_response_citation_map:
+                logger.info(f"🔵 FOLLOW-UP MODE - Evaluating fixed citation map usage")
+                logger.info(f"  - Evidence count: {len(evidences)}")
                 logger.info(f"  - Allowed docs: {allowed_docs}")
+                logger.info(f"  - Topic change: {topic_change_detected}")
 
-                # Verify evidence count matches first response
-                first_evidence_count = session.metadata.get("first_response_evidences_count", 0) if session.metadata else 0
-                if len(evidences) != first_evidence_count:
-                    logger.error(f"⚠️ Evidence count mismatch! First: {first_evidence_count}, Current: {len(evidences)}")
-                    fixed_citation_map = None
-
-                # Disable fixed map if topic changed or document scope diverged
-                meta_resolved = set(doc_scope_metadata.get("resolved_doc_ids") or doc_scope_metadata.get("doc_scope_ids") or [])
-                prev_set = set(previous_doc_ids or [])
-                if topic_change_detected or (meta_resolved and prev_set and meta_resolved != prev_set):
-                    logger.info("Disabling fixed citation map due to topic change or scope divergence")
-                    fixed_citation_map = None
+                # Only disable if topic explicitly changed
+                if topic_change_detected:
+                    logger.info("❌ Topic change detected - NOT using fixed citation map")
+                elif doc_scope_mode == "expanded":
+                    logger.info("❌ Expanded mode - NOT using fixed citation map")
+                else:
+                    # Use fixed map even if evidence count differs slightly
+                    # This handles cases where reranking produces slightly different counts
+                    fixed_citation_map = session.first_response_citation_map
+                    logger.info(f"✅ Using fixed citation map: {fixed_citation_map}")
 
             response = citation_tracker.track_citations(response, evidences, allowed_doc_ids=allowed_docs, fixed_citation_map=fixed_citation_map)
-            
-            # 6. Format response (with document filtering for follow-up questions)
-            allowed_docs_format = allowed_docs_enforce
 
-            # 6.1 답변 텍스트에서 잘못된 출처 번호 제거
-            if allowed_docs_format:
-                # sources 개수 확인
-                max_source_num = len(response.get("sources", []))
-                answer = response.get("answer", "")
+            # 🔍 DEBUGGING: Log sources count after citation_tracker
+            logger.info("🔍 DEBUG - After citation_tracker.track_citations():")
+            logger.info(f"  sources count: {len(response.get('sources', []))}")
+            for idx, src in enumerate(response.get('sources', [])[:5]):
+                logger.info(f"  Source {idx+1}: doc_id={src.get('doc_id')}, page={src.get('page')}, chunk_id={src.get('chunk_id')}")
 
-                # [N] 형식의 출처 번호 찾기 및 필터링
-                import re
-                def filter_citations(text):
-                    def replace_citation(match):
-                        num = int(match.group(1))
-                        if num <= max_source_num:
-                            return match.group(0)
-                        else:
-                            logger.warning(f"Removing invalid citation [{num}] (max: {max_source_num})")
-                            return ""
-                    return re.sub(r'\[(\d+)\]', replace_citation, text)
+            # 6. Format response
+            # SIMPLIFIED: Trust citation tracker's work, no additional filtering
+            response = formatter.format_response(response, allowed_doc_ids=None)
 
-                response["answer"] = filter_citations(answer)
-                if "details" in response:
-                    response["details"] = filter_citations(response.get("details", ""))
-                if "key_facts" in response:
-                    response["key_facts"] = [filter_citations(fact) for fact in response.get("key_facts", [])]
+            # 🔍 DEBUGGING: Log sources count after formatter
+            logger.info("🔍 DEBUG - After formatter.format_response():")
+            logger.info(f"  sources count: {len(response.get('sources', []))}")
+            for idx, src in enumerate(response.get('sources', [])[:5]):
+                logger.info(f"  Source {idx+1}: doc_id={src.get('doc_id')}, page={src.get('page')}, chunk_id={src.get('chunk_id')}")
 
-            response = formatter.format_response(response, allowed_doc_ids=allowed_docs_format)
-            
+            logger.info("="*80)
+            logger.info("AFTER FORMATTING:")
+            logger.info(f"  formatted_text: {response.get('formatted_text', '')[:500]}")
+            logger.info(f"  formatted_markdown: {response.get('formatted_markdown', '')[:500]}")
+            logger.info(f"  sources: {len(response.get('sources', []))} items")
+            logger.info("="*80)
+
             # Add assistant message
             sources = response.get("sources", [])
+
+            # 🔍 DEBUGGING: Log sources after extraction
+            logger.info(f"🔍 DEBUG - After extracting sources from response:")
+            logger.info(f"  sources count: {len(sources)}")
+            for idx, src in enumerate(sources[:5]):
+                logger.info(f"  Source {idx+1}: doc_id={src.get('doc_id')}, page={src.get('page')}, chunk_id={src.get('chunk_id')}")
 
             # 후속 답변인 경우 sources 검증
             if should_use_previous_sources:
@@ -953,18 +928,18 @@ async def send_message(
                 topic_suggested=_deduplicate_doc_ids(topic_change_suggested),
             )
 
-            # 첫 답변인 경우 evidences와 citation_map 저장
+            # Store first response evidences and citation map
+            # IMPROVED: Store based on topic state, not just message count
             is_first_response = len([m for m in session.messages if m.role == "assistant"]) == 1
-            if is_first_response and not session.first_response_evidences:
+            is_topic_reset = topic_change_detected or doc_scope_mode == "expanded"
+
+            # Store evidences and citation map for:
+            # 1. True first response (no assistant messages yet)
+            # 2. After topic change (reset state)
+            should_store = is_first_response or (is_topic_reset and not is_first_response)
+
+            if should_store:
                 citation_map = response.get("citation_map", {})
-                logger.info("🔴 FIRST RESPONSE - Saving evidences and citation map")
-                logger.info(f"  - Evidences count: {len(evidences)}")
-                logger.info(f"  - Citation map: {citation_map}")
-                logger.info(f"  - Sources count: {len(sources)}")
-
-                for idx, e in enumerate(evidences[:3]):
-                    logger.info(f"  - Evidence {idx}: doc_id={e.get('doc_id')}, page={e.get('page')}")
-
                 await session_manager.update_session(
                     session_id,
                     first_response_evidences=evidences,
@@ -972,9 +947,16 @@ async def send_message(
                     metadata={
                         **((session.metadata or {})),
                         "first_response_evidences_count": len(evidences),
-                        "first_response_citation_count": len(citation_map)
+                        "first_response_citation_count": len(citation_map),
+                        "last_topic_change": datetime.now().isoformat() if is_topic_reset else None
                     }
                 )
+                if is_topic_reset:
+                    logger.info(f"🔄 Topic reset - Stored NEW baseline: {len(evidences)} evidences, citation_map: {citation_map}")
+                else:
+                    logger.info(f"✅ First response - Stored baseline: {len(evidences)} evidences, citation_map: {citation_map}")
+            else:
+                logger.info("ℹ️ Follow-up within same topic (preserving baseline)")
 
             # Update session memory if summarizer is confident
             latest_context = await session_manager.get_session_context(session_id, max_messages=4)
@@ -1336,8 +1318,8 @@ async def send_message_stream(
             # Send status update for generation
             yield json.dumps({"status": "답변 생성 중..."}) + "\n"
 
-            # Rerank if available (후속 질문에서도 항상 reranking 수행)
-            # 첫 답변 evidences 재사용 로직 제거 - 항상 새로 검색한 evidence를 rerank
+            # Rerank if available
+            # SIMPLIFIED: Same as non-streaming endpoint
             reranker_instance = get_reranker()
             if reranker_instance and (
                 getattr(reranker_instance, "model", None)
@@ -1348,7 +1330,7 @@ async def send_message_stream(
                     evidences,
                     top_k=config.TOPK_RERANK
                 )
-                logger.info(f"Streaming: Reranked {len(evidences)} evidences for query")
+                logger.info(f"Streaming: Reranked {len(evidences)} evidences")
             else:
                 evidences = evidences[:config.TOPK_RERANK]
 
@@ -1453,31 +1435,26 @@ async def send_message_stream(
             response_payload, validation_issues = response_validator.validate_and_correct(response_payload, evidences)
             if validation_issues:
                 logger.info("Response validator (stream) issues: %s", validation_issues[:5])
-            response_payload = enforcer.enforce_evidence(
-                response_payload,
-                evidences,
-                allowed_doc_ids=allowed_docs
-            )
-            # Use fixed citation map for follow-up questions (streaming)
-            fixed_citation_map = session.first_response_citation_map if should_use_previous_sources and session.first_response_citation_map else None
-            if fixed_citation_map:
-                first_evidence_count = session.metadata.get("first_response_evidences_count", 0) if session.metadata else 0
-                if len(evidences) != first_evidence_count:
-                    fixed_citation_map = None
-                meta_resolved = set(doc_scope_metadata.get("resolved_doc_ids") or doc_scope_metadata.get("doc_scope_ids") or [])
-                prev_set = set(previous_doc_ids or [])
-                if meta_resolved and prev_set and meta_resolved != prev_set:
-                    fixed_citation_map = None
+
+            # SIMPLIFIED: Same logic as non-streaming
+            response_payload = enforcer.enforce_evidence(response_payload, evidences, allowed_doc_ids=None)
+
+            # Fixed citation map logic (streaming)
+            fixed_citation_map = None
+            if should_use_previous_sources and session.first_response_citation_map:
+                if topic_change_detected or doc_scope_mode == "expanded":
+                    logger.info("Streaming: NOT using fixed citation map (topic change or expanded)")
+                else:
+                    fixed_citation_map = session.first_response_citation_map
+                    logger.info(f"Streaming: Using fixed citation map")
+
             response_payload = citation_tracker.track_citations(
                 response_payload,
                 evidences,
                 allowed_doc_ids=allowed_docs,
                 fixed_citation_map=fixed_citation_map
             )
-            response_payload = formatter.format_response(
-                response_payload,
-                allowed_doc_ids=allowed_docs
-            )
+            response_payload = formatter.format_response(response_payload, allowed_doc_ids=None)
 
             assistant_content = response_payload.get("formatted_text", response_payload.get("answer", full_response))
             sources = response_payload.get("sources", [])
@@ -1501,11 +1478,14 @@ async def send_message_stream(
                 topic_suggested=_deduplicate_doc_ids(topic_change_suggested),
             )
 
-            # 첫 답변인 경우 evidences와 citation_map 저장 (스트리밍)
+            # Store first response evidences and citation map (streaming)
+            # IMPROVED: Same logic as non-streaming endpoint
             is_first_response = len([m for m in session.messages if m.role == "assistant"]) == 1
-            if is_first_response and not session.first_response_evidences:
+            is_topic_reset = topic_change_detected or doc_scope_mode == "expanded"
+            should_store = is_first_response or (is_topic_reset and not is_first_response)
+
+            if should_store:
                 citation_map = response_payload.get("citation_map", {})
-                logger.info(f"Streaming: Saving first response evidences: {len(evidences)} items, citation_map: {citation_map}")
                 await session_manager.update_session(
                     session_id,
                     first_response_evidences=evidences,
@@ -1513,9 +1493,14 @@ async def send_message_stream(
                     metadata={
                         **((session.metadata or {})),
                         "first_response_evidences_count": len(evidences),
-                        "first_response_citation_count": len(citation_map)
+                        "first_response_citation_count": len(citation_map),
+                        "last_topic_change": datetime.now().isoformat() if is_topic_reset else None
                     }
                 )
+                if is_topic_reset:
+                    logger.info(f"Streaming: Topic reset - Stored NEW baseline: {len(evidences)} evidences")
+                else:
+                    logger.info(f"Streaming: First response - Stored baseline: {len(evidences)} evidences")
 
             summary_updated = False
             entities_count = len(session.recent_entities or [])

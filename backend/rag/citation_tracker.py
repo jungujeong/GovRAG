@@ -22,75 +22,25 @@ class CitationTracker:
                        evidences: List[Dict],
                        allowed_doc_ids: Optional[List[str]] = None,
                        fixed_citation_map: Optional[Dict[str, int]] = None) -> Dict:
-        """Add citation tracking to response"""
+        """Add citation tracking to response
+
+        SIMPLIFIED APPROACH:
+        - NO filtering here - evidences are already filtered in chat.py
+        - Focus only on citation numbering consistency
+        - Use fixed_citation_map when provided for follow-up questions
+        """
 
         # Extract citations from response
         answer = response.get("answer", "")
         sources = response.get("sources", [])
 
-        # Filter sources if allowed_doc_ids is provided
+        # NO FILTERING - Trust that evidences are already correctly filtered
+        # This eliminates duplicate filtering logic and Unicode normalization issues
+
+        # Just log for debugging
         if allowed_doc_ids:
-            # Debug log the structure
-            logger.info(f"DEBUG: allowed_doc_ids = {allowed_doc_ids}")
-            if evidences:
-                logger.info(f"DEBUG: First evidence structure: {evidences[0].keys() if evidences[0] else 'empty'}")
-                first_doc_id = evidences[0].get('doc_id', 'NO DOC_ID')
-                logger.info(f"DEBUG: First evidence doc_id field: {first_doc_id}")
-                logger.info(f"DEBUG: First evidence doc_id repr: {repr(first_doc_id)}")
-                logger.info(f"DEBUG: First evidence metadata: {evidences[0].get('metadata', {})}")
-                # Also debug the allowed doc IDs in detail
-                for allowed_id in allowed_doc_ids:
-                    logger.info(f"DEBUG: Allowed doc_id repr: {repr(allowed_id)}")
-
-            # Filter evidences to only allowed documents
-            # Check both doc_id field and metadata.doc_id
-            filtered_evidences = []
-            for e in evidences:
-                doc_id = e.get("doc_id") or e.get("metadata", {}).get("doc_id")
-                if doc_id:
-                    # Strip and normalize doc_id for comparison (Unicode normalization)
-                    doc_id = unicodedata.normalize('NFC', doc_id.strip())
-                    # Check if doc_id matches any allowed doc (with flexible matching)
-                    matched = False
-                    for allowed_id in allowed_doc_ids:
-                        allowed_id_normalized = unicodedata.normalize('NFC', allowed_id.strip())
-                        logger.info(f"Comparing normalized: '{doc_id}' with '{allowed_id_normalized}'")
-                        if doc_id == allowed_id_normalized:
-                            matched = True
-                            logger.info(f"Matched exact: {doc_id}")
-                            break
-                        # Also try removing .pdf extension
-                        doc_id_no_pdf = doc_id.replace('.pdf', '')
-                        allowed_no_pdf = allowed_id_normalized.replace('.pdf', '')
-                        if doc_id_no_pdf == allowed_no_pdf:
-                            matched = True
-                            logger.info(f"Matched without .pdf: {doc_id}")
-                            break
-
-                    if matched:
-                        filtered_evidences.append(e)
-                        logger.info(f"✓ Keeping evidence with doc_id: {doc_id}")
-                    else:
-                        logger.warning(f"✗ Filtering out evidence with doc_id: '{doc_id}' - no match found")
-                else:
-                    # Keep evidences without doc_id
-                    logger.debug(f"Keeping evidence without doc_id: {e.get('chunk_id', 'unknown')}")
-                    filtered_evidences.append(e)
-
-            # Filter sources similarly
-            filtered_sources = []
-            for s in sources:
-                doc_id = s.get("doc_id") or s.get("metadata", {}).get("doc_id")
-                if doc_id:
-                    if doc_id in allowed_doc_ids:
-                        filtered_sources.append(s)
-                else:
-                    # Keep sources without doc_id
-                    filtered_sources.append(s)
-
-            logger.info(f"Citation tracking: filtered {len(evidences)} to {len(filtered_evidences)} evidences based on allowed docs: {allowed_doc_ids}")
-            evidences = filtered_evidences
-            sources = filtered_sources
+            logger.info(f"Citation tracking with allowed_doc_ids: {allowed_doc_ids}")
+            logger.info(f"Evidence count: {len(evidences)}, Source count: {len(sources)}")
 
         # Create citation map from evidences
         self.citation_map = self._build_citation_map(evidences)
@@ -112,8 +62,9 @@ class CitationTracker:
             answer_with_citations, used_citation_map = self._add_inline_citations_with_map_tracking(answer, evidences)
             response["answer"] = answer_with_citations
 
-            # Format source list
-            formatted_sources = self._format_sources(sources, evidences)
+            # FIXED: Format sources using the cited evidence map
+            # This ensures ALL cited evidences become sources
+            formatted_sources = self._format_sources_from_cited_map(evidences, used_citation_map)
             response["sources"] = self._dedupe_sources(formatted_sources)
 
             # Store the citation map for future use
@@ -433,40 +384,76 @@ class CitationTracker:
         return "\n".join(display_lines)
 
     def _add_inline_citations_with_map_tracking(self, answer: str, evidences: List[Dict]) -> Tuple[str, Dict[str, int]]:
-        """Add inline citations and track the mapping used"""
+        """Add inline citations and track the mapping used
+
+        CRITICAL FIX: Parse existing [1], [2] citations from LLM response FIRST,
+        then match them to evidences to build cited_evidences map.
+
+        Previous bug: Method tried to add NEW citations based on content similarity,
+        but ignored citations that LLM already generated, resulting in incomplete
+        cited_evidences map and missing sources.
+        """
         cited_evidences = {}
 
-        # Process text to fix citations
-        lines = answer.split('\n')
-        fixed_lines = []
-        next_citation_num = 1
+        # STEP 1: Extract ALL citation numbers that LLM already used in the answer
+        # This finds [1], [2], etc. anywhere in the text
+        citation_pattern = re.compile(r'\[(\d+)\]')
+        all_cited_numbers = set()
+        for match in citation_pattern.finditer(answer):
+            cite_num = int(match.group(1))
+            all_cited_numbers.add(cite_num)
 
-        for line in lines:
-            # Check if this line contains numbered items with citations
-            if re.match(r'^\d+\.\[', line):
-                # Extract the content and find matching evidence
-                fixed_line = self._fix_line_citation_sequential(line, evidences, cited_evidences, next_citation_num)
-                # Update next citation number if new citation was added
-                if fixed_line != line:
-                    match = re.search(r'\[(\d+)\]', fixed_line)
-                    if match:
-                        cite_num = int(match.group(1))
-                        if cite_num >= next_citation_num:
-                            next_citation_num = cite_num + 1
-                fixed_lines.append(fixed_line)
+        logger.info(f"🔍 Found {len(all_cited_numbers)} citation numbers in LLM response: {sorted(all_cited_numbers)}")
+
+        # STEP 2: Match each citation number to its corresponding evidence
+        # Build the cited_evidences map by matching content to evidences
+        for cite_num in sorted(all_cited_numbers):
+            # Extract text segments that have this citation number
+            # Find the context around each [cite_num] to match to evidence
+            segments = []
+            lines = answer.split('\n')
+            for line in lines:
+                if f'[{cite_num}]' in line:
+                    # Extract meaningful content (remove citation markers for matching)
+                    clean_line = re.sub(r'\[(\d+)\]', '', line).strip()
+                    if clean_line:
+                        segments.append(clean_line)
+
+            if not segments:
+                continue
+
+            # Find best matching evidence for this citation number
+            best_evidence = None
+            best_score = 0.0
+
+            for evidence in evidences:
+                evidence_text = evidence.get("text", "")
+
+                # Calculate similarity with all segments that use this citation
+                total_score = 0.0
+                for segment in segments:
+                    score = self._calculate_content_similarity(segment, evidence_text)
+                    total_score += score
+
+                avg_score = total_score / len(segments) if segments else 0.0
+
+                if avg_score > best_score:
+                    best_score = avg_score
+                    best_evidence = evidence
+
+            # Assign this evidence to this citation number
+            if best_evidence and best_score > 0.2:  # Lower threshold for existing citations
+                evidence_key = f"{best_evidence.get('doc_id', '')}_{best_evidence.get('page', 0)}_{best_evidence.get('chunk_id', '')}"
+                cited_evidences[evidence_key] = cite_num
+                logger.info(f"  ✅ Citation [{cite_num}] matched to {best_evidence.get('doc_id')} (score: {best_score:.2f})")
             else:
-                # For non-numbered lines, add citations based on content matching
-                fixed_line = self._add_citations_to_line_sequential(line, evidences, cited_evidences, next_citation_num)
-                # Update next citation number if new citation was added
-                if fixed_line != line:
-                    match = re.search(r'\[(\d+)\]', fixed_line)
-                    if match:
-                        cite_num = int(match.group(1))
-                        if cite_num >= next_citation_num:
-                            next_citation_num = cite_num + 1
-                fixed_lines.append(fixed_line)
+                logger.warning(f"  ⚠️ Citation [{cite_num}] could not be matched to any evidence (best score: {best_score:.2f})")
 
-        return '\n'.join(fixed_lines), cited_evidences
+        logger.info(f"📋 Built citation map with {len(cited_evidences)} evidences")
+
+        # STEP 3: Return answer as-is (LLM already added citations correctly)
+        # and return the cited_evidences map
+        return answer, cited_evidences
 
     def _add_inline_citations_with_fixed_map(self, answer: str, evidences: List[Dict], fixed_map: Dict[str, int]) -> str:
         """Add inline citations using fixed citation mapping"""
@@ -565,6 +552,10 @@ class CitationTracker:
                 cite_num = fixed_map[evidence_key]
                 seen_citations.add(cite_num)
 
+                # Clean text_snippet for fixed map sources too
+                text_snippet = evidence.get("text", "")
+                cleaned_snippet = self._clean_text_snippet(text_snippet)
+
                 formatted.append({
                     "index": cite_num,
                     "display_index": cite_num,  # Add display_index for frontend
@@ -573,11 +564,90 @@ class CitationTracker:
                     "start_char": evidence.get("start_char", -1),
                     "end_char": evidence.get("end_char", -1),
                     "chunk_id": evidence.get("chunk_id", ""),
-                    "text_snippet": evidence.get("text", "")
+                    "text_snippet": cleaned_snippet  # Use cleaned version
                 })
 
         return formatted
-    
+
+    def _format_sources_from_cited_map(self, evidences: List[Dict], cited_map: Dict[str, int]) -> List[Dict]:
+        """Format sources from cited evidence map
+
+        This ensures that ALL cited evidences become sources in the response.
+        Addresses the bug where search_results had more items than response_sources.
+
+        Args:
+            evidences: List of all evidence documents
+            cited_map: Dictionary mapping evidence_key to citation_number
+                      e.g., {"구청장 지시사항(제116호)_2_directive-5": 1, ...}
+
+        Returns:
+            List of formatted source dictionaries with citation numbers
+        """
+        formatted = []
+
+        # Process each evidence and check if it was cited
+        for evidence in evidences:
+            # Create the same key format used during citation tracking
+            evidence_key = f"{evidence.get('doc_id', '')}_{evidence.get('page', 0)}_{evidence.get('chunk_id', '')}"
+
+            # Only include this evidence if it was actually cited
+            if evidence_key in cited_map:
+                cite_num = cited_map[evidence_key]
+
+                # Clean text_snippet: remove special characters and normalize
+                text_snippet = evidence.get("text", "")
+                cleaned_snippet = self._clean_text_snippet(text_snippet)
+
+                formatted.append({
+                    "index": cite_num,
+                    "display_index": cite_num,
+                    "doc_id": evidence.get("doc_id", "unknown"),
+                    "page": evidence.get("page", 0),
+                    "start_char": evidence.get("start_char", -1),
+                    "end_char": evidence.get("end_char", -1),
+                    "chunk_id": evidence.get("chunk_id", ""),
+                    "text_snippet": cleaned_snippet,  # Use cleaned version
+                    "original_index": evidences.index(evidence) + 1,  # Track original position
+                    "is_cited": True  # Mark as cited
+                })
+
+        # Sort by citation number to maintain sequential order [1], [2], [3]...
+        formatted.sort(key=lambda x: x["index"])
+
+        logger.info(f"Formatted {len(formatted)} sources from {len(cited_map)} cited evidences (out of {len(evidences)} total)")
+
+        return formatted
+
+    def _clean_text_snippet(self, text: str) -> str:
+        """Clean text snippet by removing special characters and normalizing
+
+        Removes problematic characters like private use area Unicode (󰏅)
+        and other non-printable or special characters that harm readability.
+        """
+        if not text:
+            return ""
+
+        # Remove private use area Unicode characters (U+E0000 to U+F8FF)
+        # These include characters like 󰏅 that appear in PDF extractions
+        cleaned = re.sub(r'[\uE000-\uF8FF]', '', text)
+
+        # Remove other problematic Unicode categories
+        # Cc: Control characters, Cf: Format characters
+        import unicodedata
+        cleaned = ''.join(
+            char for char in cleaned
+            if unicodedata.category(char) not in ('Cc', 'Cf', 'Cn')
+            or char in ('\n', '\t', ' ')  # Keep whitespace
+        )
+
+        # Normalize multiple spaces
+        cleaned = re.sub(r' {2,}', ' ', cleaned)
+
+        # Normalize multiple newlines (max 2 consecutive)
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+
+        return cleaned.strip()
+
     def _init_embedder(self):
         """Initialize sentence embedder for semantic similarity"""
         try:
