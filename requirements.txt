@@ -25,3 +25,4 @@ torch==2.5.1
 tiktoken==0.8.0
 opencv-python==4.10.0.84
 psutil==6.1.1
+kiwipiepy==0.18.2

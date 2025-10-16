@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from whoosh import index, qparser
 from whoosh.fields import Schema, TEXT, ID, NUMERIC, KEYWORD
-from whoosh.analysis import RegexTokenizer, LowercaseFilter, StopFilter
+from whoosh.analysis import Tokenizer, Token, LowercaseFilter, StopFilter
 from whoosh.scoring import BM25F
 from whoosh.writing import AsyncWriter
 import logging
@@ -14,11 +14,129 @@ from utils.index_integrity import IndexIntegrityChecker, safe_index_operation
 
 logger = logging.getLogger(__name__)
 
+# Kiwi tokenizer for Korean morphological analysis
+class KiwiTokenizer(Tokenizer):
+    """Kiwi-based Korean morphological tokenizer for Whoosh"""
+
+    # Singleton Kiwi instance for performance
+    _kiwi = None
+
+    def __init__(self, extract_pos=None):
+        """
+        Args:
+            extract_pos: POS tags to extract (default: NNG, NNP, VV, VA, MAG)
+                - NNG: 일반명사 (general noun)
+                - NNP: 고유명사 (proper noun)
+                - VV: 동사 (verb)
+                - VA: 형용사 (adjective)
+                - MAG: 일반부사 (adverb)
+        """
+        if extract_pos is None:
+            # Extract nouns, verbs, adjectives by default
+            self.extract_pos = {'NNG', 'NNP', 'VV', 'VA', 'MAG', 'SN', 'SL'}
+        else:
+            self.extract_pos = set(extract_pos)
+
+    @classmethod
+    def _get_kiwi(cls):
+        """Get or create Kiwi instance (singleton pattern)"""
+        if cls._kiwi is None:
+            try:
+                from kiwipiepy import Kiwi
+                cls._kiwi = Kiwi()
+                logger.info("Initialized Kiwi morphological analyzer")
+            except ImportError:
+                logger.warning("kiwipiepy not installed. Falling back to regex tokenizer.")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to initialize Kiwi: {e}")
+                return None
+        return cls._kiwi
+
+    def __call__(self, value, positions=False, chars=False, keeporiginal=False,
+                 removestops=True, start_pos=0, start_char=0, mode='', **kwargs):
+        """Tokenize text using Kiwi morphological analyzer"""
+
+        kiwi = self._get_kiwi()
+        if kiwi is None:
+            # Fallback to simple regex tokenizer
+            import re
+            words = re.findall(r'[가-힣]+|[a-zA-Z]+|[0-9]+', value)
+            for pos_idx, word in enumerate(words):
+                token = Token(positions, chars, removestops=removestops, mode=mode)
+                token.text = word
+                if positions:
+                    token.pos = start_pos + pos_idx
+                if chars:
+                    token.startchar = start_char
+                    token.endchar = start_char + len(word)
+                    start_char += len(word) + 1
+                yield token
+            return
+
+        # Tokenize with Kiwi
+        try:
+            result = kiwi.tokenize(value)
+            pos_idx = 0
+            char_idx = 0
+
+            for morph in result:
+                # Extract lemma and POS tag
+                for form, tag, start, end in morph:
+                    # Filter by POS tag
+                    if self.extract_pos and tag not in self.extract_pos:
+                        continue
+
+                    # Skip single character particles
+                    if len(form) < 2 and tag in {'JKS', 'JKC', 'JKG', 'JKO', 'JKB', 'JX', 'EP', 'EF', 'EC', 'ETN', 'ETM'}:
+                        continue
+
+                    token = Token(positions, chars, removestops=removestops, mode=mode)
+                    token.text = form  # Use lemma (base form)
+                    token.pos_tag = tag  # Store POS tag
+
+                    if positions:
+                        token.pos = start_pos + pos_idx
+                        pos_idx += 1
+
+                    if chars:
+                        token.startchar = start_char + start
+                        token.endchar = start_char + end
+
+                    yield token
+
+        except Exception as e:
+            logger.error(f"Kiwi tokenization failed: {e}")
+            # Fallback to simple regex tokenizer
+            import re
+            words = re.findall(r'[가-힣]+|[a-zA-Z]+|[0-9]+', value)
+            for pos_idx, word in enumerate(words):
+                token = Token(positions, chars, removestops=removestops, mode=mode)
+                token.text = word
+                if positions:
+                    token.pos = start_pos + pos_idx
+                if chars:
+                    token.startchar = start_char
+                    token.endchar = start_char + len(word)
+                    start_char += len(word) + 1
+                yield token
+
 def get_korean_analyzer():
-    """Create a simple Korean analyzer"""
-    # Use simple regex tokenizer with filters
-    tokenizer = RegexTokenizer(r'[가-힣]+|[a-zA-Z]+|[0-9]+')
-    korean_stopwords = frozenset(['은', '는', '이', '가', '을', '를', '에', '에서', '의', '와', '과'])
+    """Create a Kiwi-based Korean analyzer with morphological analysis"""
+    # Use Kiwi tokenizer for better Korean handling
+    tokenizer = KiwiTokenizer()
+
+    # Extended Korean stopwords (particles and endings)
+    korean_stopwords = frozenset([
+        # 조사 (particles)
+        '은', '는', '이', '가', '을', '를', '에', '에서', '의', '와', '과', '도', '만', '로', '으로',
+        '부터', '까지', '보다', '처럼', '같이', '마저', '조차', '에게', '한테', '께',
+        # 어미 (endings) - Kiwi already filters these by POS, but keep for safety
+        '다', '요', '죠', '네', '군', '구나',
+        # 보조용언 (auxiliary verbs/adjectives)
+        '하다', '되다', '이다', '아니다', '있다', '없다',
+    ])
+
     return tokenizer | LowercaseFilter() | StopFilter(stoplist=korean_stopwords)
 
 class WhooshBM25:
