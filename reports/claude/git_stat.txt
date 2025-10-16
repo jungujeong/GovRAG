@@ -1,0 +1,266 @@
+ .backend.pid                                       |    1 +
+ .claude/agents/agent-expert.md                     |  478 ++
+ .claude/agents/ai-engineer.md                      |   33 +
+ .claude/agents/backend-architect.md                |   31 +
+ .claude/agents/code-reviewer.md                    |   30 +
+ .claude/agents/context-manager.md                  |   65 +
+ .claude/agents/debugger.md                         |   31 +
+ .claude/agents/documentation-expert.md             |   48 +
+ .claude/agents/error-detective.md                  |   33 +
+ .claude/agents/frontend-developer.md               |   32 +
+ .claude/agents/load-testing-specialist.md          |   37 +
+ .claude/agents/performance-engineer.md             |   33 +
+ .claude/agents/performance-profiler.md             |  799 ++++
+ .claude/agents/prompt-engineer.md                  |  112 +
+ .claude/agents/react-performance-optimization.md   |   65 +
+ .claude/agents/test-automator.md                   |   33 +
+ .claude/agents/ui-ux-designer.md                   |   36 +
+ .claude/commands/upload_github.md                  |   26 +
+ .claude/settings.local.json                        |   69 +
+ .env                                               |   65 +-
+ .env.example                                       |   51 +
+ .frontend.pid                                      |    1 +
+ .gitignore                                         |  118 +-
+ .mcp.json                                          |   14 +
+ .nosync                                            |    0
+ .nvmrc                                             |    1 +
+ .python-version                                    |    1 +
+ ...4\355\225\255(\354\240\234099\355\230\270).pdf" |  Bin 0 -> 114615 bytes
+ ...4\355\225\255(\354\240\234100\355\230\270).pdf" |  Bin 0 -> 117058 bytes
+ ...4\355\225\255(\354\240\234116\355\230\270).pdf" |  Bin 0 -> 114918 bytes
+ ...25\255_\353\263\264\352\263\240\354\204\234.md" |   62 +
+ ...25\255_\353\263\264\352\263\240\354\204\234.md" |   47 +
+ AGENTS 2.md                                        |   39 +
+ AGENTS.md                                          |   39 +
+ CLAUDE.md                                          |  315 ++
+ DUPLICATE_FILES_FIX.md                             |  195 +
+ EMERGENCY_FIX.md                                   |  206 +
+ FIXES_2025-10-14.md                                |  584 +++
+ HALLUCINATION_FIX_REPORT.md                        |  142 +
+ INDEX_MANAGEMENT.md                                |  181 +
+ ISSUE_FOLLOW_UP_QUESTIONS.md                       |   95 +
+ LICENSE                                            |   21 -
+ Makefile                                           |  117 +
+ PROJECT_PLAN.md                                    |  212 +
+ README.md                                          |  170 +-
+ README_ENHANCED.md                                 |    1 -
+ WINDOWS_SETUP.md                                   |  215 +
+ app.py                                             | 1189 -----
+ app_enhanced.py                                    | 1262 -----
+ backend/.env                                       |   51 +
+ backend/.env.example                               |   51 +
+ backend/.gitignore                                 |  191 +
+ ...25\255_\353\263\264\352\263\240\354\204\234.md" |  150 +
+ backend/Makefile                                   |   58 +
+ backend/__init__.py                                |    1 +
+ backend/config.py                                  |   81 +
+ backend/data/dept_whitelist.txt                    |   48 +
+ ...\255(\354\240\234099\355\230\270)_summary.json" |    8 +
+ backend/deps.py                                    |   81 +
+ backend/eval/__init__.py                           |    1 +
+ backend/eval/failure_report.py                     |  230 +
+ backend/eval/golden_evaluator.py                   |  262 ++
+ backend/eval/metrics.py                            |  205 +
+ backend/main.py                                    |  112 +
+ backend/processors/__init__.py                     |    1 +
+ .../directive_extractor_whitelist_final.py         |  935 ++++
+ backend/processors/directive_processor.py          |  375 ++
+ backend/processors/hwp_structure_parser.py         |  290 ++
+ backend/processors/indexer.py                      |  394 ++
+ backend/processors/normalizer_govkr.py             |  233 +
+ backend/processors/pdf_hybrid_processor.py         |  295 ++
+ backend/processors/simple_indexer.py               |   46 +
+ backend/processors/structure_chunker.py            |  508 ++
+ backend/rag/__init__.py                            |    1 +
+ backend/rag/answer_formatter.py                    |  713 +++
+ backend/rag/chroma_store.py                        |  260 ++
+ backend/rag/citation_tracker.py                    |  813 ++++
+ backend/rag/conversation_summarizer.py             |  180 +
+ backend/rag/doc_scope_resolver.py                  |  452 ++
+ backend/rag/embedder.py                            |  101 +
+ backend/rag/evidence_enforcer.py                   |  271 ++
+ backend/rag/generator_ollama.py                    |  339 ++
+ backend/rag/hybrid_retriever.py                    |  580 +++
+ backend/rag/prompt_templates.py                    |  239 +
+ backend/rag/query_rewriter.py                      |  510 ++
+ backend/rag/real_time_corrector.py                 |  189 +
+ backend/rag/reranker.py                            |  217 +
+ backend/rag/response_grounder.py                   |  236 +
+ backend/rag/response_postprocessor.py              |  232 +
+ backend/rag/response_validator.py                  |  364 ++
+ backend/rag/topic_detector.py                      |  255 +
+ backend/rag/two_stage_retrieval.py                 |  238 +
+ backend/rag/whoosh_bm25.py                         |  303 ++
+ backend/rag/whoosh_bm25_old.py                     |  218 +
+ backend/routers/__init__.py                        |    1 +
+ backend/routers/admin.py                           |  399 ++
+ backend/routers/chat.py                            | 2029 ++++++++
+ backend/routers/documents.py                       |  728 +++
+ backend/routers/query.py                           |  403 ++
+ backend/routers/sessions.py                        |  400 ++
+ backend/schemas.py                                 |   96 +
+ backend/services/__init__.py                       |    0
+ backend/services/document_summarizer.py            |  380 ++
+ backend/services/session_manager.py                |  364 ++
+ backend/services/title_generator.py                |  166 +
+ backend/session_manager.py                         |  428 ++
+ backend/utils/__init__.py                          |    1 +
+ backend/utils/cache.py                             |  187 +
+ backend/utils/cache_manager.py                     |  192 +
+ backend/utils/concurrency.py                       |  208 +
+ backend/utils/error_handler.py                     |  232 +
+ backend/utils/index_integrity.py                   |  262 ++
+ backend/utils/index_manager.py                     |  202 +
+ backend/utils/log_utils.py                         |  112 +
+ backend/utils/ocr.py                               |  227 +
+ backend/utils/query_logger.py                      |  626 +++
+ backend/utils/rate_limiter.py                      |  157 +
+ backend/utils/text.py                              |  197 +
+ backend/utils/validation.py                        |  247 +
+ backup/vector_db/chroma.sqlite3                    |  Bin 245760 -> 0 bytes
+ chat_system.md                                     |  116 +
+ clear_fake_data.py                                 |  136 +
+ config/__init__.py                                 |   33 -
+ config/__pycache__/__init__.cpython-311.pyc        |  Bin 716 -> 0 bytes
+ config/__pycache__/__init__.cpython-312.pyc        |  Bin 561 -> 0 bytes
+ config/__pycache__/config.cpython-311.pyc          |  Bin 4715 -> 0 bytes
+ config/__pycache__/config.cpython-312.pyc          |  Bin 4132 -> 0 bytes
+ config/config.py                                   |   98 -
+ config/improved_models.md                          |  111 -
+ conversation_memory_plan.md                        |  110 +
+ data/golden/doc_meta.json                          |   11 +
+ data/golden/eval_rules.json                        |   13 +
+ data/golden/qa_100.json                            | 1605 +++++++
+ debug_chroma_detailed.py                           |  111 +
+ docs/MONITORING_GUIDE.md                           |  352 ++
+ docs/STATISTICAL_APPROACH.md                       |  216 +
+ fix_imports.py                                     |   40 +
+ frontend/.gitignore                                |   38 +
+ frontend/.nvmrc                                    |    1 +
+ frontend/cleanup_duplicates.sh                     |   29 +
+ frontend/index.html                                |   13 +
+ frontend/package-lock.json                         | 4911 ++++++++++++++++++++
+ frontend/package.json                              |   33 +
+ frontend/postcss.config.js                         |    6 +
+ frontend/src/App-backup.jsx                        |   34 +
+ frontend/src/App.complex.jsx                       |  633 +++
+ frontend/src/App.jsx                               |   35 +
+ frontend/src/App.simple.jsx                        |   83 +
+ frontend/src/AppMediumClean.jsx                    | 1280 +++++
+ frontend/src/AppMinimal.jsx                        |   54 +
+ frontend/src/AppSimple.jsx                         |   13 +
+ frontend/src/App_Chat.jsx                          |  604 +++
+ frontend/src/App_Medium.jsx                        | 2099 +++++++++
+ frontend/src/App_MultiSession.jsx                  |  510 ++
+ frontend/src/App_Original.jsx                      |  189 +
+ frontend/src/App_Session.jsx                       |  987 ++++
+ frontend/src/DebugComponent.jsx                    |   14 +
+ frontend/src/DocumentDetailsPopup_Usage.md         |  135 +
+ frontend/src/components/AccessibleChat.jsx         |  160 +
+ frontend/src/components/AnswerWithCitations.jsx    |  169 +
+ frontend/src/components/ChatArea.css               |  305 ++
+ frontend/src/components/ChatArea.jsx               |  101 +
+ frontend/src/components/CitationPopup.jsx          |   87 +
+ frontend/src/components/ConfirmDialog.jsx          |   91 +
+ frontend/src/components/DocumentDetail.jsx         |  247 +
+ frontend/src/components/DocumentDetailsPopup.jsx   |  190 +
+ frontend/src/components/ErrorBoundary.css          |  191 +
+ frontend/src/components/ErrorBoundary.jsx          |  142 +
+ frontend/src/components/LargeUploadZone.jsx        |  128 +
+ frontend/src/components/LoadingOverlay.jsx         |    0
+ frontend/src/components/MessageInput.css           |  202 +
+ frontend/src/components/MessageRenderer.jsx        |  197 +
+ frontend/src/components/MonitoringDashboard.jsx    |  384 ++
+ frontend/src/components/SessionManager.jsx         |  494 ++
+ frontend/src/components/SessionSidebar.css         |  300 ++
+ frontend/src/components/SessionSidebar.jsx         |  223 +
+ frontend/src/components/StatusIndicator.jsx        |   69 +
+ frontend/src/components/StructuredAnswer.jsx       |  443 ++
+ frontend/src/components/SummaryPopup.jsx           |  471 ++
+ frontend/src/hooks/useAutoSave.js                  |  145 +
+ frontend/src/hooks/useKeyboardShortcuts.js         |    0
+ frontend/src/hooks/useSessionManager.js            |  201 +
+ frontend/src/hooks/useStorage.js                   |  117 +
+ frontend/src/hooks/useStreamingResponse.js         |  219 +
+ frontend/src/main.jsx                              |   10 +
+ frontend/src/services/chatAPI.js                   |  181 +
+ frontend/src/services/documentAPI.js               |    0
+ frontend/src/stores/chatStore.js                   |   70 +
+ frontend/src/stores/documentStore.js               |   60 +
+ frontend/src/stores/sessionStore.js                |    0
+ frontend/src/stores/streamingStore.js              |  187 +
+ frontend/src/styles.css                            |  176 +
+ frontend/src/styles/Chat.css                       | 1779 +++++++
+ frontend/src/styles/CitationPopup.css              |  335 ++
+ frontend/src/styles/CleanMedium.css                |  565 +++
+ frontend/src/styles/DocumentDetailsPopup.css       |  351 ++
+ frontend/src/styles/MediumDesign.css               | 1229 +++++
+ frontend/src/styles/MediumStyle.css                |    0
+ frontend/src/styles/MultiSession.css               |  353 ++
+ frontend/src/utils/serverMonitor.js                |    0
+ frontend/src/utils/streamingManager.js             |  112 +
+ frontend/tailwind.config.js                        |   21 +
+ frontend/vite.config.js                            |   23 +
+ install.py                                         |  276 ++
+ package-lock.json                                  |    6 +
+ pdftest.py                                         |  125 -
+ requirements.txt                                   |   48 +-
+ run-dev.sh                                         |   56 +
+ run.py                                             |  217 +
+ scripts/clean.bat                                  |   17 +
+ scripts/index-backup.bat                           |    8 +
+ scripts/index-clean.bat                            |    8 +
+ scripts/index-list.bat                             |    7 +
+ scripts/index-repair.bat                           |    8 +
+ scripts/index-restore.bat                          |    8 +
+ scripts/index-verify.bat                           |    8 +
+ scripts/index.bat                                  |    9 +
+ scripts/install.bat                                |   22 +
+ scripts/install.ps1                                |   68 +
+ scripts/run.bat                                    |   16 +
+ scripts/run.ps1                                    |   57 +
+ scripts/setup.bat                                  |   20 +
+ setup_offline.py                                   |  162 +
+ start.sh                                           |  112 +
+ start_frontend.sh                                  |   10 +
+ stop.sh                                            |   42 +
+ table_utils.py                                     |   76 -
+ test_bm25_sync.py                                  |  115 -
+ test_enhanced_rag.py                               |  229 -
+ test_monitoring_apis.sh                            |   97 +
+ test_pdf.py                                        |   52 -
+ test_rag_accuracy.py                               |  149 -
+ tests/test_citation.py                             |  193 +
+ tests/test_generation.py                           |  175 +
+ tests/test_retrieval.py                            |  172 +
+ tools/bundle_creator.py                            |  230 +
+ tools/export_licenses.md                           |  101 +
+ tools/integrity_verifier.py                        |  203 +
+ tools/validate_installation.py                     |  244 +
+ utils/__init__.py                                  |   32 -
+ utils/__pycache__/__init__.cpython-311.pyc         |  Bin 806 -> 0 bytes
+ utils/__pycache__/__init__.cpython-312.pyc         |  Bin 695 -> 0 bytes
+ .../__pycache__/document_processor.cpython-311.pyc |  Bin 18690 -> 0 bytes
+ .../__pycache__/document_processor.cpython-312.pyc |  Bin 16066 -> 0 bytes
+ .../performance_optimization.cpython-311.pyc       |  Bin 6795 -> 0 bytes
+ utils/__pycache__/rag_chain.cpython-311.pyc        |  Bin 29578 -> 0 bytes
+ utils/__pycache__/rag_chain.cpython-312.pyc        |  Bin 24915 -> 0 bytes
+ utils/__pycache__/vector_store.cpython-311.pyc     |  Bin 26562 -> 0 bytes
+ utils/__pycache__/vector_store.cpython-312.pyc     |  Bin 22946 -> 0 bytes
+ utils/document_processor.py                        |  352 --
+ utils/enhanced_document_processor.py               |  293 --
+ utils/enhanced_rag_chain.py                        |  493 --
+ utils/enhanced_vector_store.py                     |  485 --
+ utils/hwplib/__init__.py                           |    5 -
+ utils/hwplib/__pycache__/__init__.cpython-311.pyc  |  Bin 285 -> 0 bytes
+ utils/hwplib/__pycache__/__init__.cpython-312.pyc  |  Bin 275 -> 0 bytes
+ utils/hwplib/__pycache__/hwp_linux.cpython-311.pyc |  Bin 16179 -> 0 bytes
+ utils/hwplib/__pycache__/hwp_linux.cpython-312.pyc |  Bin 13806 -> 0 bytes
+ utils/hwplib/hwp_linux.py                          |  276 --
+ utils/hwplib/hwp_loader.py                         |   79 -
+ utils/hwplib/hwplib-1.1.8.jar                      |  Bin 1012404 -> 0 bytes
+ utils/hwplib/test_hwplib.py                        |   58 -
+ utils/rag_chain.py                                 |  611 ---
+ utils/table_utils.py                               |  140 -
+ utils/vector_store.py                              |  533 ---
+ 265 files changed, 51950 insertions(+), 7031 deletions(-)

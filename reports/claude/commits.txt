@@ -1,0 +1,46 @@
+7c00a13 fix: chat.py 로깅 시스템 수정 및 모니터링 기능 추가
+b705aa3 fix: improve frontend startup reliability and cleanup unused files
+68e5ad3 fix: improve document summary generation reliability and performance
+9bac1f0 fix: resolve frontend infinite loading and improve startup reliability
+15e9500 feat: add missing files for document summary feature
+3e1ad8a feat: add document summary button to UI and fix summary path
+763891f fix: resolve citation mismatch and topic change detection issues (#51)
+8771476 Merge pull request #49 from jungujeong/feature/statistical-approach-refactor
+5b27063 refactor: replace hardcoded patterns with statistical approaches
+53de022 fix(postprocess): harmonize tokens with evidence vocabulary
+e69f095 Revert "fix(postprocess): drop low-coverage sentences to avoid unsupported facts"
+55450d0 Revert "fix(postprocess): canonicalize entities and prune unsupported sentences"
+09339aa fix(postprocess): canonicalize entities and prune unsupported sentences
+3063e90 fix(postprocess): drop low-coverage sentences to avoid unsupported facts
+325c7de fix(rag): drop Levenshtein dependency and use pure Python similarity
+cf622e4 fix(rag): validate outputs against evidences and normalize entity variants
+0ab0391 fix(frontend): surface streaming errors and avoid silent empty replies
+f0d0663 chore(prompt): guide model to structure answers by intent
+afed6fa Revert "feat(postprocess): auto-structure department summaries when requested"
+9c897ea feat(postprocess): auto-structure department summaries when requested
+d601c2e fix(citation,format): unify numbering and avoid duplicates; preserve line breaks; guard fixed citation map
+7ffa3f6 feat(rag): topic-aware doc scope, re-retrieval, and citation stability
+4063cd6 Merge pull request #46 from jungujeong/feature/improve-rag-accuracy
+7291a4c feat: improve RAG system accuracy and topic detection
+50a06c7 Merge pull request #44 from jungujeong/feature/improve-rag-system
+05f6560 feat: improve citation system with sequential numbering and interactive UI
+3eb1b3c Merge pull request #41 from jungujeong/feature/improve-citation-system
+63daa81 feat: improve citation system with sequential numbering and interactive UI
+04b03ae Merge pull request #39 from jungujeong/feature/improve-response-generation-and-cleanup
+f24250a feat: improve response generation and clean up codebase
+0d5d4df Merge pull request #37 from jungujeong/feature/fix-index-corruption-and-improve-korean-handling
+e3d2fe2 feat: fix index corruption issues and improve Korean language handling
+d85f114 Merge pull request #35 from jungujeong/feature/improve-ui-and-citation-system
+c87845d feat: enhance UI/UX and citation system for Korean RAG chatbot
+ece3e14 Merge pull request #33 from jungujeong/feature/enhanced-directive-processing
+3bd9c1b feat: implement enhanced directive processing with Y-axis coordinate matching
+3029257 clean: remove old RAG system files
+efd4669 feat: merge new Evidence-Only RAG system (#31)
+c083e13 update: add SSH and Git commands to Claude settings
+8252d29 chore: 재생성 가능한 파일들을 Git에서 제외
+50e0af5 feat: 새로운 RAG 시스템 구현 - 한국어 공문서 전용
+2d4507b update: claude settings for directive processing tools
+58e0266 clean: 데이터 파일 정리, .gitkeep만 유지
+adad94e feat: 완전 개선된 RAG 시스템 구현
+cdd18cd chore: exclude large model files from git
+c1330b8 feat: new RAG chatbot system with Evidence-Only generation
