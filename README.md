@@ -166,7 +166,24 @@ pip download -r requirements.txt -d ./pip_packages
 ls -lh pip_packages/
 ```
 
-##### 1-4. 프로젝트 파일 압축
+##### 1-4. Node.js 패키지 다운로드
+
+```bash
+# 프론트엔드 폴더로 이동
+cd ~/RAG시스템/claude_rag_gpt5/frontend
+
+# Node.js 패키지 설치
+npm install
+
+# 프로젝트 루트로 돌아가서 node_modules 압축
+cd ~/RAG시스템/claude_rag_gpt5
+tar -czf frontend_node_modules.tar.gz -C frontend node_modules/
+
+# 압축 확인
+ls -lh frontend_node_modules.tar.gz
+```
+
+##### 1-5. 프로젝트 파일 압축
 
 ```bash
 # 모든 파일을 하나의 압축 파일로
@@ -186,7 +203,7 @@ tar -czf rag_offline_bundle.tar.gz \
 ls -lh rag_offline_bundle.tar.gz
 ```
 
-##### 1-5. Ollama 모델 폴더 압축
+##### 1-6. Ollama 모델 폴더 압축
 
 ```bash
 # Ollama 모델 압축
@@ -204,6 +221,7 @@ ls -lh ollama_models.tar.gz
 1. `ollama-linux-amd64` - Ollama 실행 파일
 2. `ollama_models.tar.gz` - AI 모델 파일
 3. `rag_offline_bundle.tar.gz` - 프로젝트 파일
+4. `frontend_node_modules.tar.gz` - 프론트엔드 의존성
 
 **전송 방법:**
 - USB 메모리
@@ -249,14 +267,14 @@ ollama list
 ##### 3-3. 프로젝트 설치
 
 ```bash
-# 프로젝트 압축 해제
-mkdir -p ~/RAG시스템
-cd ~/RAG시스템
-tar -xzf rag_offline_bundle.tar.gz
+# 프로젝트 디렉토리 생성 및 압축 해제
+mkdir -p ~/RAG시스템/claude_rag_gpt5
+cd ~/RAG시스템/claude_rag_gpt5
+tar -xzf /전송받은경로/rag_offline_bundle.tar.gz
 
 # 폴더 확인
 ls -la
-# backend/, frontend/, data/ 등이 보여야 함
+# backend/, frontend/, data/, pip_packages/ 등이 보여야 함
 
 # Python 패키지 오프라인 설치
 pip install --no-index --find-links=./pip_packages -r requirements.txt
@@ -284,14 +302,16 @@ nano .env
 ##### 3-5. 프론트엔드 설치
 
 ```bash
-cd frontend
+# 프론트엔드 디렉토리로 이동
+cd ~/RAG시스템/claude_rag_gpt5/frontend
 
-# Node.js 패키지 설치 (오프라인)
-# 사전에 node_modules.tar.gz 준비 필요
-npm install
+# node_modules 압축 해제
+tar -xzf /전송받은경로/frontend_node_modules.tar.gz
 
-# 빌드
-npm run build
+# node_modules 확인
+ls -lh node_modules/
+
+# 설치 완료 (npm install 불필요)
 ```
 
 ---
@@ -374,6 +394,7 @@ pip download [패키지명] -d ./pip_packages
 - [ ] Ollama 모델 다운로드 (`ollama pull qwen3:14b`)
 - [ ] 모델 파일 압축 (`ollama_models.tar.gz`)
 - [ ] Python 패키지 다운로드 (`pip download`)
+- [ ] Node.js 패키지 다운로드 및 압축 (`frontend_node_modules.tar.gz`)
 - [ ] 프로젝트 파일 압축 (`rag_offline_bundle.tar.gz`)
 
 **폐쇄망 서버:**
@@ -382,10 +403,10 @@ pip download [패키지명] -d ./pip_packages
 - [ ] Ollama 서비스 시작 (`ollama serve`)
 - [ ] 모델 파일 압축 해제 (`~/.ollama/models/`)
 - [ ] `ollama list`로 모델 확인
-- [ ] 프로젝트 압축 해제
+- [ ] 프로젝트 압축 해제 (`~/RAG시스템/claude_rag_gpt5/`)
 - [ ] Python 패키지 설치 (`pip install --no-index`)
 - [ ] `.env` 파일 설정
-- [ ] 프론트엔드 빌드 (`npm run build`)
+- [ ] 프론트엔드 node_modules 압축 해제
 - [ ] `./start.sh` 실행 테스트
 
 **설치 완료** → [3. 프로그램 실행](#3-프로그램-실행)으로 이동
