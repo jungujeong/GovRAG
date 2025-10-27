@@ -40,12 +40,22 @@
 
 ## 2. 설치 방법
 
-###  Step 1: 프로그램 다운로드
+> **설치 환경을 선택하세요:**
+> - **A. 인터넷 연결된 환경** → 바로 아래 [방법 A](#방법-a-인터넷-연결된-환경) 참고
+> - **B. 폐쇄망(인터넷 없는) 환경** → [방법 B](#방법-b-폐쇄망오프라인-환경) 참고
+
+---
+
+### 방법 A: 인터넷 연결된 환경
+
+인터넷이 연결되어 있고, 한 대의 컴퓨터에서만 사용할 경우
+
+####  Step 1: 프로그램 다운로드
 
 1. 받으신 압축 파일(`claude_rag_gpt5.zip`)을 압축 해제
 2. 권장 위치: `/home/[사용자명]/RAG시스템/`
 
-###  Step 2: 필수 프로그램 설치 확인
+####  Step 2: 필수 프로그램 설치 확인
 
 **터미널에서 확인:**
 
@@ -63,7 +73,7 @@ ollama --version
 >  **오류가 나오면?**
 > "명령을 찾을 수 없습니다" 등의 오류 시 → 해당 프로그램 설치 필요
 
-###  Step 3: AI 모델 다운로드
+####  Step 3: AI 모델 다운로드
 
 **터미널에서:**
 
@@ -81,7 +91,7 @@ ollama list
 
  **모델 교체**: 추후 더 높은 성능의 AI 모델로 언제든지 변경 가능합니다.
 
-###  Step 4: 프로그램 의존성 설치
+####  Step 4: 프로그램 의존성 설치
 
 ```bash
 cd ~/RAG시스템/claude_rag_gpt5
@@ -93,6 +103,292 @@ chmod +x install.sh
 
 >  **설치 중 "계속하시겠습니까?" 나오면**
 > → `Y` 입력 후 Enter
+
+**✅ 설치 완료!** → [3. 프로그램 실행](#3-프로그램-실행)으로 이동
+
+---
+
+### 방법 B: 폐쇄망(오프라인) 환경
+
+인터넷이 없는 서버에 설치하거나, 여러 대의 컴퓨터에서 접속할 경우
+
+> **작업 순서:**
+> 1. 인터넷 있는 PC에서 필요한 파일 다운로드
+> 2. USB/네트워크로 폐쇄망 서버에 전송
+> 3. 폐쇄망 서버에 설치
+
+---
+
+#### 📦 Step 1: 인터넷 있는 PC에서 준비
+
+##### 1-1. Ollama 설치 파일 다운로드
+
+**Linux 서버용:**
+```bash
+# 최신 버전 다운로드
+wget https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64
+
+# 다운로드 확인
+ls -lh ollama-linux-amd64
+```
+
+##### 1-2. Ollama 모델 다운로드
+
+```bash
+# 1. Ollama 설치 (임시)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 2. 모델 다운로드 (원하는 크기 선택)
+ollama pull qwen3:14b
+
+# 3. 모델 파일 위치 확인
+ls -lh ~/.ollama/models/
+```
+
+**참고: 모델 크기 선택**
+| 모델 | 크기 | 필요 RAM | 용도 |
+|------|------|----------|------|
+| `qwen3:4b` | 2.5GB | 8GB+ | 테스트/소형 |
+| `qwen3:8b` | 5.2GB | 16GB+ | 일반 사용 |
+| `qwen3:14b` | 9.3GB | 24GB+ | 권장 |
+| `qwen3:30b` | 19GB | 48GB+ | 고성능 |
+
+##### 1-3. Python 패키지 다운로드
+
+```bash
+# 프로젝트 폴더로 이동
+cd ~/RAG시스템/claude_rag_gpt5
+
+# pip 패키지 다운로드 (오프라인용)
+pip download -r requirements.txt -d ./pip_packages
+
+# 다운로드 확인
+ls -lh pip_packages/
+```
+
+##### 1-4. 프로젝트 파일 압축
+
+```bash
+# 모든 파일을 하나의 압축 파일로
+tar -czf rag_offline_bundle.tar.gz \
+  backend/ \
+  frontend/ \
+  data/ \
+  requirements.txt \
+  .env.example \
+  start.sh \
+  stop.sh \
+  install.sh \
+  README.md \
+  pip_packages/
+
+# 압축 파일 크기 확인
+ls -lh rag_offline_bundle.tar.gz
+```
+
+##### 1-5. Ollama 모델 폴더 압축
+
+```bash
+# Ollama 모델 압축
+tar -czf ollama_models.tar.gz -C ~/.ollama models/
+
+# 압축 파일 크기 확인
+ls -lh ollama_models.tar.gz
+```
+
+---
+
+#### 💾 Step 2: 폐쇄망 서버로 파일 전송
+
+**전송할 파일 목록:**
+1. `ollama-linux-amd64` - Ollama 실행 파일
+2. `ollama_models.tar.gz` - AI 모델 파일
+3. `rag_offline_bundle.tar.gz` - 프로젝트 파일
+
+**전송 방법:**
+- USB 메모리
+- 내부 네트워크 (SCP)
+- 승인된 파일 전송 시스템
+
+---
+
+#### 🖥️ Step 3: 폐쇄망 서버에 설치
+
+##### 3-1. Ollama 설치
+
+```bash
+# Ollama 바이너리 설치
+sudo install -o root -g root -m 755 ollama-linux-amd64 /usr/local/bin/ollama
+
+# 설치 확인
+ollama --version
+# 출력: ollama version is 0.x.x
+
+# Ollama 서비스 시작 (백그라운드)
+nohup ollama serve > /dev/null 2>&1 &
+
+# 실행 확인
+ps aux | grep ollama
+```
+
+##### 3-2. Ollama 모델 설치
+
+```bash
+# 홈 디렉토리에 압축 해제
+cd ~
+tar -xzf ollama_models.tar.gz
+
+# 모델 파일 확인
+ls -lh ~/.ollama/models/
+
+# Ollama에서 모델 확인
+ollama list
+# 출력: qwen3:14b 등이 표시되어야 함
+```
+
+##### 3-3. 프로젝트 설치
+
+```bash
+# 프로젝트 압축 해제
+mkdir -p ~/RAG시스템
+cd ~/RAG시스템
+tar -xzf rag_offline_bundle.tar.gz
+
+# 폴더 확인
+ls -la
+# backend/, frontend/, data/ 등이 보여야 함
+
+# Python 패키지 오프라인 설치
+pip install --no-index --find-links=./pip_packages -r requirements.txt
+
+# 또는 가상환경 사용 시:
+python3 -m venv venv
+source venv/bin/activate
+pip install --no-index --find-links=./pip_packages -r requirements.txt
+```
+
+##### 3-4. 환경 설정
+
+```bash
+# .env 파일 생성
+cp .env.example .env
+
+# .env 파일 편집 (모델 이름 확인)
+nano .env
+
+# 확인 사항:
+# OLLAMA_MODEL=qwen3:14b  (다운받은 모델과 일치해야 함)
+# OLLAMA_HOST=http://localhost:11434
+```
+
+##### 3-5. 프론트엔드 설치
+
+```bash
+cd frontend
+
+# Node.js 패키지 설치 (오프라인)
+# 사전에 node_modules.tar.gz 준비 필요
+npm install
+
+# 빌드
+npm run build
+```
+
+---
+
+#### ✅ Step 4: 설치 검증
+
+```bash
+# 1. Ollama 상태 확인
+curl http://localhost:11434/api/tags
+# 정상: {"models":[...]} 응답
+
+# 2. Ollama 모델 확인
+ollama list
+# qwen3:14b 등이 보여야 함
+
+# 3. 시스템 시작
+cd ~/RAG시스템/claude_rag_gpt5
+./start.sh
+
+# 4. 브라우저에서 접속
+# http://localhost:5173
+```
+
+---
+
+#### 🔧 폐쇄망 환경 문제 해결
+
+##### "Ollama에 연결할 수 없습니다"
+
+**원인**: Ollama 서비스가 실행되지 않음
+
+**해결:**
+```bash
+# Ollama 프로세스 확인
+ps aux | grep ollama
+
+# 없으면 실행
+nohup ollama serve > /dev/null 2>&1 &
+
+# 포트 확인
+netstat -tlnp | grep 11434
+```
+
+##### "모델을 찾을 수 없습니다"
+
+**원인**: 모델 파일이 제대로 복사되지 않음
+
+**해결:**
+```bash
+# 모델 위치 확인
+ls -lh ~/.ollama/models/manifests/
+ls -lh ~/.ollama/models/blobs/
+
+# 모델 목록 확인
+ollama list
+
+# .env 파일의 모델 이름 확인
+cat .env | grep OLLAMA_MODEL
+```
+
+##### "Python 패키지 설치 실패"
+
+**원인**: pip_packages 폴더가 없거나 불완전함
+
+**해결:**
+```bash
+# pip_packages 폴더 확인
+ls -lh pip_packages/
+
+# 누락된 패키지가 있다면 인터넷 있는 PC에서 다시 다운로드
+pip download [패키지명] -d ./pip_packages
+```
+
+---
+
+#### 📋 폐쇄망 설치 체크리스트
+
+**인터넷 있는 PC:**
+- [ ] Ollama 설치 파일 다운로드 (`ollama-linux-amd64`)
+- [ ] Ollama 모델 다운로드 (`ollama pull qwen3:14b`)
+- [ ] 모델 파일 압축 (`ollama_models.tar.gz`)
+- [ ] Python 패키지 다운로드 (`pip download`)
+- [ ] 프로젝트 파일 압축 (`rag_offline_bundle.tar.gz`)
+
+**폐쇄망 서버:**
+- [ ] 파일 전송 완료 (USB/네트워크)
+- [ ] Ollama 바이너리 설치 (`sudo install`)
+- [ ] Ollama 서비스 시작 (`ollama serve`)
+- [ ] 모델 파일 압축 해제 (`~/.ollama/models/`)
+- [ ] `ollama list`로 모델 확인
+- [ ] 프로젝트 압축 해제
+- [ ] Python 패키지 설치 (`pip install --no-index`)
+- [ ] `.env` 파일 설정
+- [ ] 프론트엔드 빌드 (`npm run build`)
+- [ ] `./start.sh` 실행 테스트
+
+**✅ 설치 완료!** → [3. 프로그램 실행](#3-프로그램-실행)으로 이동
 
 ---
 
@@ -378,289 +674,6 @@ claude_rag_gpt5/
     ├── frontend.log            # 프론트엔드 로그
     └── queries/                # 질문/답변 기록
 ```
-
----
-
-## 8. 폐쇄망(오프라인) 환경 설치 가이드
-
-> **이 섹션은 인터넷이 없는 서버에 설치할 때 사용하세요**
-
-폐쇄망 환경에서는 2단계로 설치합니다:
-1. **인터넷 있는 PC**: 필요한 파일 다운로드 및 패키징
-2. **폐쇄망 서버**: 패키징된 파일로 설치
-
----
-
-### 📦 1단계: 인터넷 있는 PC에서 준비
-
-#### 1-1. Ollama 설치 파일 다운로드
-
-**Linux 서버용:**
-```bash
-# 최신 버전 다운로드 (예시)
-wget https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64
-
-# 다운로드 확인
-ls -lh ollama-linux-amd64
-```
-
-#### 1-2. Ollama 모델 다운로드
-
-```bash
-# 1. Ollama 설치 (임시)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 2. 모델 다운로드 (예시: 14B 파라미터)
-ollama pull qwen3:14b
-
-# 3. 모델 파일 위치 확인
-ls -lh ~/.ollama/models/
-
-# 출력 예시:
-# manifests/
-# blobs/
-```
-
-**참고: 모델 크기**
-- `qwen3:4b` - 2.5GB (8GB RAM)
-- `qwen3:8b` - 5.2GB (16GB RAM)
-- `qwen3:14b` - 9.3GB (24GB RAM)
-- `qwen3:30b` - 19GB (48GB RAM)
-
-#### 1-3. Python 패키지 다운로드
-
-```bash
-# 프로젝트 폴더로 이동
-cd ~/RAG시스템/claude_rag_gpt5
-
-# pip 패키지 다운로드 (오프라인용)
-pip download -r requirements.txt -d ./pip_packages
-
-# 다운로드 확인
-ls -lh pip_packages/
-```
-
-#### 1-4. 프로젝트 파일 압축
-
-```bash
-# 모든 파일을 하나의 압축 파일로
-tar -czf rag_offline_bundle.tar.gz \
-  backend/ \
-  frontend/ \
-  data/ \
-  requirements.txt \
-  .env.example \
-  start.sh \
-  stop.sh \
-  install.sh \
-  README.md \
-  pip_packages/
-
-# 압축 파일 크기 확인
-ls -lh rag_offline_bundle.tar.gz
-```
-
-#### 1-5. Ollama 모델 폴더 압축
-
-```bash
-# Ollama 모델 압축
-tar -czf ollama_models.tar.gz -C ~/.ollama models/
-
-# 압축 파일 크기 확인
-ls -lh ollama_models.tar.gz
-```
-
----
-
-### 💾 2단계: 폐쇄망 서버로 파일 전송
-
-**전송할 파일 목록:**
-1. `ollama-linux-amd64` - Ollama 실행 파일
-2. `ollama_models.tar.gz` - AI 모델 파일
-3. `rag_offline_bundle.tar.gz` - 프로젝트 파일
-
-**전송 방법:**
-- USB 메모리
-- 내부 네트워크 (SCP)
-- 승인된 파일 전송 시스템
-
----
-
-### 🖥️ 3단계: 폐쇄망 서버에 설치
-
-#### 3-1. Ollama 설치
-
-```bash
-# Ollama 바이너리 설치
-sudo install -o root -g root -m 755 ollama-linux-amd64 /usr/local/bin/ollama
-
-# 설치 확인
-ollama --version
-# 출력: ollama version is 0.x.x
-
-# Ollama 서비스 시작 (백그라운드)
-nohup ollama serve > /dev/null 2>&1 &
-
-# 실행 확인
-ps aux | grep ollama
-```
-
-#### 3-2. Ollama 모델 설치
-
-```bash
-# 홈 디렉토리에 압축 해제
-cd ~
-tar -xzf ollama_models.tar.gz
-
-# 모델 파일 확인
-ls -lh ~/.ollama/models/
-
-# Ollama에서 모델 확인
-ollama list
-# 출력: qwen3:14b 등이 표시되어야 함
-```
-
-#### 3-3. 프로젝트 설치
-
-```bash
-# 프로젝트 압축 해제
-mkdir -p ~/RAG시스템
-cd ~/RAG시스템
-tar -xzf rag_offline_bundle.tar.gz
-
-# 폴더 확인
-ls -la
-# backend/, frontend/, data/ 등이 보여야 함
-
-# Python 패키지 오프라인 설치
-pip install --no-index --find-links=./pip_packages -r requirements.txt
-
-# 또는 가상환경 사용 시:
-python3 -m venv venv
-source venv/bin/activate
-pip install --no-index --find-links=./pip_packages -r requirements.txt
-```
-
-#### 3-4. 환경 설정
-
-```bash
-# .env 파일 생성
-cp .env.example .env
-
-# .env 파일 편집 (모델 이름 확인)
-nano .env
-
-# 확인 사항:
-# OLLAMA_MODEL=qwen3:14b  (다운받은 모델과 일치해야 함)
-# OLLAMA_HOST=http://localhost:11434
-```
-
-#### 3-5. 프론트엔드 설치
-
-```bash
-cd frontend
-
-# Node.js 패키지 설치 (오프라인)
-# 사전에 node_modules.tar.gz 준비 필요
-npm install
-
-# 빌드
-npm run build
-```
-
----
-
-### ✅ 4단계: 설치 검증
-
-```bash
-# 1. Ollama 상태 확인
-curl http://localhost:11434/api/tags
-# 정상: {"models":[...]} 응답
-
-# 2. Ollama 모델 확인
-ollama list
-# qwen3:14b 등이 보여야 함
-
-# 3. 시스템 시작
-cd ~/RAG시스템/claude_rag_gpt5
-./start.sh
-
-# 4. 브라우저에서 접속
-# http://localhost:5173
-```
-
----
-
-### 🔧 폐쇄망 환경 문제 해결
-
-#### "Ollama에 연결할 수 없습니다"
-
-**원인**: Ollama 서비스가 실행되지 않음
-
-**해결:**
-```bash
-# Ollama 프로세스 확인
-ps aux | grep ollama
-
-# 없으면 실행
-nohup ollama serve > /dev/null 2>&1 &
-
-# 포트 확인
-netstat -tlnp | grep 11434
-```
-
-#### "모델을 찾을 수 없습니다"
-
-**원인**: 모델 파일이 제대로 복사되지 않음
-
-**해결:**
-```bash
-# 모델 위치 확인
-ls -lh ~/.ollama/models/manifests/
-ls -lh ~/.ollama/models/blobs/
-
-# 모델 목록 확인
-ollama list
-
-# .env 파일의 모델 이름 확인
-cat .env | grep OLLAMA_MODEL
-```
-
-#### "Python 패키지 설치 실패"
-
-**원인**: pip_packages 폴더가 없거나 불완전함
-
-**해결:**
-```bash
-# pip_packages 폴더 확인
-ls -lh pip_packages/
-
-# 누락된 패키지가 있다면 인터넷 있는 PC에서 다시 다운로드
-pip download [패키지명] -d ./pip_packages
-```
-
----
-
-### 📋 폐쇄망 설치 체크리스트
-
-#### 인터넷 있는 PC:
-- [ ] Ollama 설치 파일 다운로드 (`ollama-linux-amd64`)
-- [ ] Ollama 모델 다운로드 (`ollama pull qwen3:14b`)
-- [ ] 모델 파일 압축 (`ollama_models.tar.gz`)
-- [ ] Python 패키지 다운로드 (`pip download`)
-- [ ] 프로젝트 파일 압축 (`rag_offline_bundle.tar.gz`)
-
-#### 폐쇄망 서버:
-- [ ] 파일 전송 완료 (USB/네트워크)
-- [ ] Ollama 바이너리 설치 (`sudo install`)
-- [ ] Ollama 서비스 시작 (`ollama serve`)
-- [ ] 모델 파일 압축 해제 (`~/.ollama/models/`)
-- [ ] `ollama list`로 모델 확인
-- [ ] 프로젝트 압축 해제
-- [ ] Python 패키지 설치 (`pip install --no-index`)
-- [ ] `.env` 파일 설정
-- [ ] 프론트엔드 빌드 (`npm run build`)
-- [ ] `./start.sh` 실행 테스트
 
 ---
 
