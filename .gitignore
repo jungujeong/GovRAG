@@ -98,5 +98,5 @@ frontend/build/
 *.bak
 temp/
 tmp/
-# Large model files
-models/
+# Large model files (only root models/ directory for downloaded model weights)
+/models/
