@@ -50,10 +50,40 @@ fi
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo "✓ Python 버전: $PYTHON_VERSION"
 
-# Ollama 확인 (경고만, 강제 종료 안함)
+# Ollama 확인 및 자동 시작
 if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    echo "⚠️  Ollama가 실행 중이 아닙니다. 질의 응답이 작동하지 않을 수 있습니다."
-    echo "   Ollama 시작: ollama serve"
+    echo "⚠️  Ollama가 실행 중이 아닙니다. 자동으로 시작합니다..."
+
+    # Ollama가 설치되어 있는지 확인
+    if ! command -v ollama &> /dev/null; then
+        echo "❌ Ollama가 설치되어 있지 않습니다."
+        echo "   설치 방법: https://ollama.com/download"
+        echo "   또는 README.md의 설치 방법을 참고하세요."
+        exit 1
+    fi
+
+    # Ollama 서비스 시작
+    nohup ollama serve > logs/ollama.log 2>&1 &
+    OLLAMA_PID=$!
+    echo "   Ollama PID: $OLLAMA_PID"
+
+    # Ollama가 시작될 때까지 대기 (최대 10초)
+    echo "   Ollama 초기화 중..."
+    for i in {1..10}; do
+        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+            echo "   ✓ Ollama 준비 완료"
+            break
+        fi
+        sleep 1
+    done
+
+    # 최종 확인
+    if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+        echo "   ❌ Ollama 시작 실패. logs/ollama.log를 확인하세요."
+        exit 1
+    fi
+else
+    echo "✓ Ollama가 실행 중입니다."
 fi
 
 # 로그 디렉토리 생성
