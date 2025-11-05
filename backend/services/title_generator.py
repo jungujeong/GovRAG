@@ -16,6 +16,32 @@ class TitleGenerator:
         self.base_url = config.OLLAMA_HOST
         self.model = config.OLLAMA_MODEL
         self.timeout = httpx.Timeout(10.0, connect=5.0)
+        self.use_chat_api = None  # Will be determined on first call
+
+    async def _detect_api_version(self) -> bool:
+        """Detect if Ollama supports /api/chat (v0.1.14+)"""
+        if self.use_chat_api is not None:
+            return self.use_chat_api
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                # Try chat API with a minimal request
+                test_request = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "test"}],
+                    "stream": False
+                }
+                response = await client.post(
+                    f"{self.base_url}/api/chat",
+                    json=test_request
+                )
+                self.use_chat_api = (response.status_code != 404)
+                logger.info(f"Ollama API version detected (TitleGenerator): {'chat' if self.use_chat_api else 'generate'}")
+                return self.use_chat_api
+        except Exception as e:
+            logger.warning(f"API detection failed, defaulting to /api/generate: {e}")
+            self.use_chat_api = False
+            return False
 
     async def generate_title(self, first_message: str, assistant_response: Optional[str] = None) -> str:
         """
@@ -62,31 +88,52 @@ class TitleGenerator:
 
 제목 (2-5단어, 20자 이내):"""
 
+        # Detect API version on first call
+        await self._detect_api_version()
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/api/chat",
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        "temperature": 0.3,  # 일관성 있는 제목 생성
-                        "max_tokens": 50,
-                        "stream": False
-                    }
-                )
+                if self.use_chat_api:
+                    # Use /api/chat endpoint (v0.1.14+)
+                    response = await client.post(
+                        f"{self.base_url}/api/chat",
+                        json={
+                            "model": self.model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}
+                            ],
+                            "temperature": 0.3,  # 일관성 있는 제목 생성
+                            "max_tokens": 50,
+                            "stream": False
+                        }
+                    )
 
-                if response.status_code == 200:
-                    result = response.json()
-                    title = result.get("message", {}).get("content", "").strip()
+                    if response.status_code == 200:
+                        result = response.json()
+                        title = result.get("message", {}).get("content", "").strip()
+                else:
+                    # Use /api/generate endpoint (older versions)
+                    combined_prompt = f"{system_prompt}\n\n{user_prompt}"
+                    response = await client.post(
+                        f"{self.base_url}/api/generate",
+                        json={
+                            "model": self.model,
+                            "prompt": combined_prompt,
+                            "temperature": 0.3,
+                            "stream": False
+                        }
+                    )
 
-                    # 후처리
-                    title = self._clean_title(title)
+                    if response.status_code == 200:
+                        result = response.json()
+                        title = result.get("response", "").strip()
 
-                    if title and len(title) > 1:
-                        return title
+                # 후처리
+                title = self._clean_title(title)
+
+                if title and len(title) > 1:
+                    return title
 
         except Exception as e:
             logger.error(f"LLM 제목 생성 실패: {e}")

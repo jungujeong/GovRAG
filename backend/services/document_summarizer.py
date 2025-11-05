@@ -6,6 +6,8 @@ import os
 import json
 import asyncio
 import logging
+import httpx
+import re
 from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
@@ -41,9 +43,37 @@ class DocumentSummarizer:
             self.summary_dir = Path(config.DOC_DIR).parent / "summaries"
             self.summary_dir.mkdir(parents=True, exist_ok=True)
 
+            # API version detection
+            self.use_chat_api = None  # Will be determined on first call
+
         except Exception as e:
             logger.error(f"Failed to initialize DocumentSummarizer: {e}")
             raise
+
+    async def _detect_api_version(self) -> bool:
+        """Detect if Ollama supports /api/chat (v0.1.14+)"""
+        if self.use_chat_api is not None:
+            return self.use_chat_api
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                # Try chat API with a minimal request
+                test_request = {
+                    "model": config.OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": "test"}],
+                    "stream": False
+                }
+                response = await client.post(
+                    f"{config.OLLAMA_HOST}/api/chat",
+                    json=test_request
+                )
+                self.use_chat_api = (response.status_code != 404)
+                logger.info(f"Ollama API version detected (DocumentSummarizer): {'chat' if self.use_chat_api else 'generate'}")
+                return self.use_chat_api
+        except Exception as e:
+            logger.warning(f"API detection failed, defaulting to /api/generate: {e}")
+            self.use_chat_api = False
+            return False
 
     def _get_summary_file_path(self, doc_id: str) -> Path:
         """Get summary file path for document ID"""
@@ -211,16 +241,42 @@ class DocumentSummarizer:
 
                 logger.info(f"Attempt {attempt + 1}/{max_retries}: Requesting summary from Ollama")
 
+                # Detect API version on first call
+                await self._detect_api_version()
+
                 # Longer timeout for slower computers (3 minutes)
+                summary = ""
                 async with httpx.AsyncClient(timeout=180.0) as client:
-                    response = await client.post(
-                        f"{config.OLLAMA_HOST}/api/chat",
-                        json=request_data
-                    )
+                    if self.use_chat_api:
+                        # Use /api/chat endpoint (v0.1.14+)
+                        response = await client.post(
+                            f"{config.OLLAMA_HOST}/api/chat",
+                            json=request_data
+                        )
+                    else:
+                        # Use /api/generate endpoint (older versions)
+                        system_msg = request_data["messages"][0]["content"]
+                        user_msg = request_data["messages"][1]["content"]
+                        combined_prompt = f"{system_msg}\n\n{user_msg}"
+
+                        generate_request = {
+                            "model": request_data["model"],
+                            "prompt": combined_prompt,
+                            "temperature": request_data.get("temperature", 0.1),
+                            "stream": False
+                        }
+
+                        response = await client.post(
+                            f"{config.OLLAMA_HOST}/api/generate",
+                            json=generate_request
+                        )
 
                 if response.status_code == 200:
                     result = response.json()
-                    summary = result.get("message", {}).get("content", "").strip()
+                    if self.use_chat_api:
+                        summary = result.get("message", {}).get("content", "").strip()
+                    else:
+                        summary = result.get("response", "").strip()
 
                     logger.info(f"Raw Ollama response: {summary[:200]}...")  # Log first 200 chars
 

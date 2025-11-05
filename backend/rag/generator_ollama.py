@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class OllamaGenerator:
     """Ollama-based text generator with streaming support"""
-    
+
     def __init__(self):
         self.base_url = config.OLLAMA_HOST
         self.model = config.OLLAMA_MODEL
@@ -20,13 +20,42 @@ class OllamaGenerator:
         self.top_p = config.GEN_TOP_P
         self.max_tokens = config.GEN_MAX_TOKENS
         self.timeout = httpx.Timeout(120.0, connect=10.0)  # Increase timeout for slower models
+        self.use_chat_api = None  # Will be determined on first call
     
-    async def generate(self, 
+    async def _detect_api_version(self) -> bool:
+        """Detect if Ollama supports /api/chat (v0.1.14+)"""
+        if self.use_chat_api is not None:
+            return self.use_chat_api
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                # Try chat API with a minimal request
+                test_request = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "test"}],
+                    "stream": False
+                }
+                response = await client.post(
+                    f"{self.base_url}/api/chat",
+                    json=test_request
+                )
+                self.use_chat_api = (response.status_code != 404)
+                logger.info(f"Ollama API version detected: {'chat' if self.use_chat_api else 'generate'}")
+                return self.use_chat_api
+        except Exception as e:
+            logger.warning(f"API detection failed, defaulting to /api/generate: {e}")
+            self.use_chat_api = False
+            return False
+
+    async def generate(self,
                        query: str,
                        evidences: List[Dict],
                        stream: bool = False) -> Dict:
         """Generate response using Ollama"""
-        
+
+        # Detect API version on first call
+        await self._detect_api_version()
+
         # Format prompt
         system_prompt = PromptTemplates.get_system_prompt(evidences)
         user_prompt = PromptTemplates.format_user_prompt(query, evidences)
@@ -65,24 +94,49 @@ class OllamaGenerator:
         """Generate complete response"""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                response = await client.post(
-                    f"{self.base_url}/api/chat",
-                    json=request_data
-                )
-                
-                if response.status_code != 200:
-                    raise Exception(f"Ollama returned {response.status_code}")
-                
-                result = response.json()
-                
-                # Parse response
-                content = result.get("message", {}).get("content", "")
-                
+                if self.use_chat_api:
+                    # Use /api/chat endpoint (v0.1.14+)
+                    response = await client.post(
+                        f"{self.base_url}/api/chat",
+                        json=request_data
+                    )
+
+                    if response.status_code != 200:
+                        raise Exception(f"Ollama returned {response.status_code}")
+
+                    result = response.json()
+                    content = result.get("message", {}).get("content", "")
+                else:
+                    # Use /api/generate endpoint (older versions)
+                    # Convert messages to single prompt
+                    system_msg = next((m["content"] for m in request_data["messages"] if m["role"] == "system"), "")
+                    user_msg = next((m["content"] for m in request_data["messages"] if m["role"] == "user"), "")
+                    combined_prompt = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
+
+                    generate_request = {
+                        "model": request_data["model"],
+                        "prompt": combined_prompt,
+                        "temperature": request_data.get("temperature", 0.0),
+                        "top_p": request_data.get("top_p", 1.0),
+                        "stream": False
+                    }
+
+                    response = await client.post(
+                        f"{self.base_url}/api/generate",
+                        json=generate_request
+                    )
+
+                    if response.status_code != 200:
+                        raise Exception(f"Ollama returned {response.status_code}")
+
+                    result = response.json()
+                    content = result.get("response", "")
+
                 # Try to parse structured response
                 parsed = self._parse_response(content)
-                
+
                 return parsed
-                
+
             except httpx.ConnectError:
                 logger.error("Cannot connect to Ollama. Is it running?")
                 raise Exception("Ollama 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.")
@@ -90,21 +144,51 @@ class OllamaGenerator:
     async def _generate_stream(self, request_data: Dict) -> AsyncIterator[str]:
         """Generate streaming response"""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/api/chat",
-                json=request_data
-            ) as response:
-                async for line in response.aiter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            if "message" in data:
-                                content = data["message"].get("content", "")
+            if self.use_chat_api:
+                # Use /api/chat endpoint (v0.1.14+)
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/api/chat",
+                    json=request_data
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                if "message" in data:
+                                    content = data["message"].get("content", "")
+                                    if content:
+                                        yield content
+                            except json.JSONDecodeError:
+                                continue
+            else:
+                # Use /api/generate endpoint (older versions)
+                system_msg = next((m["content"] for m in request_data["messages"] if m["role"] == "system"), "")
+                user_msg = next((m["content"] for m in request_data["messages"] if m["role"] == "user"), "")
+                combined_prompt = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
+
+                generate_request = {
+                    "model": request_data["model"],
+                    "prompt": combined_prompt,
+                    "temperature": request_data.get("temperature", 0.0),
+                    "top_p": request_data.get("top_p", 1.0),
+                    "stream": True
+                }
+
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/api/generate",
+                    json=generate_request
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                content = data.get("response", "")
                                 if content:
                                     yield content
-                        except json.JSONDecodeError:
-                            continue
+                            except json.JSONDecodeError:
+                                continue
     
     def _parse_response(self, content: str) -> Dict:
         """Parse LLM response into structured format
@@ -289,41 +373,93 @@ class OllamaGenerator:
             "stream": True
         }
 
+        # Detect API version on first call
+        await self._detect_api_version()
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                async with client.stream(
-                    'POST',
-                    f"{self.base_url}/api/chat",
-                    json=request_data
-                ) as response:
-                    response.raise_for_status()
+                if self.use_chat_api:
+                    # Use /api/chat endpoint (v0.1.14+)
+                    async with client.stream(
+                        'POST',
+                        f"{self.base_url}/api/chat",
+                        json=request_data
+                    ) as response:
+                        response.raise_for_status()
 
-                    # DEBUG: Collect raw response for logging
-                    raw_response_parts = []
+                        # DEBUG: Collect raw response for logging
+                        raw_response_parts = []
 
-                    async for line in response.aiter_lines():
-                        # Check cancellation
-                        if cancel_event and cancel_event.is_set():
-                            break
+                        async for line in response.aiter_lines():
+                            # Check cancellation
+                            if cancel_event and cancel_event.is_set():
+                                break
 
-                        if line:
-                            try:
-                                data = json.loads(line)
-                                if data.get("message", {}).get("content"):
-                                    content = data["message"]["content"]
-                                    raw_response_parts.append(content)
-                                    yield content
-                            except json.JSONDecodeError:
-                                continue
+                            if line:
+                                try:
+                                    data = json.loads(line)
+                                    if data.get("message", {}).get("content"):
+                                        content = data["message"]["content"]
+                                        raw_response_parts.append(content)
+                                        yield content
+                                except json.JSONDecodeError:
+                                    continue
 
-                    # DEBUG: Log the complete raw response
-                    if raw_response_parts:
-                        full_raw_response = ''.join(raw_response_parts)
-                        logger.info("="*80)
-                        logger.info("DEBUG: RAW MODEL RESPONSE FROM OLLAMA")
-                        logger.info("="*80)
-                        logger.info(f"{full_raw_response[:2000]}...")
-                        logger.info("="*80)
+                        # DEBUG: Log the complete raw response
+                        if raw_response_parts:
+                            full_raw_response = ''.join(raw_response_parts)
+                            logger.info("="*80)
+                            logger.info("DEBUG: RAW MODEL RESPONSE FROM OLLAMA")
+                            logger.info("="*80)
+                            logger.info(f"{full_raw_response[:2000]}...")
+                            logger.info("="*80)
+                else:
+                    # Use /api/generate endpoint (older versions)
+                    system_msg = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+                    user_msg = messages[1]["content"] if len(messages) > 1 else ""
+                    combined_prompt = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
+
+                    generate_request = {
+                        "model": request_data["model"],
+                        "prompt": combined_prompt,
+                        "temperature": request_data.get("temperature", 0.0),
+                        "top_p": request_data.get("top_p", 1.0),
+                        "stream": True
+                    }
+
+                    async with client.stream(
+                        'POST',
+                        f"{self.base_url}/api/generate",
+                        json=generate_request
+                    ) as response:
+                        response.raise_for_status()
+
+                        # DEBUG: Collect raw response for logging
+                        raw_response_parts = []
+
+                        async for line in response.aiter_lines():
+                            # Check cancellation
+                            if cancel_event and cancel_event.is_set():
+                                break
+
+                            if line:
+                                try:
+                                    data = json.loads(line)
+                                    content = data.get("response", "")
+                                    if content:
+                                        raw_response_parts.append(content)
+                                        yield content
+                                except json.JSONDecodeError:
+                                    continue
+
+                        # DEBUG: Log the complete raw response
+                        if raw_response_parts:
+                            full_raw_response = ''.join(raw_response_parts)
+                            logger.info("="*80)
+                            logger.info("DEBUG: RAW MODEL RESPONSE FROM OLLAMA")
+                            logger.info("="*80)
+                            logger.info(f"{full_raw_response[:2000]}...")
+                            logger.info("="*80)
 
         except Exception as e:
             logger.error(f"Stream generation with context failed: {e}")
