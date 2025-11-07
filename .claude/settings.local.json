@@ -56,7 +56,12 @@
       "Bash(do curl -s http://localhost:8000/api/health)",
       "Bash(break)",
       "Bash(done)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(git pull:*)",
+      "Bash(git merge:*)",
+      "Bash(grep:*)",
+      "Bash(git stash:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
